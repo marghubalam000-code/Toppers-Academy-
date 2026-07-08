@@ -1,0 +1,6 @@
+{
+  "name": "Toppers Academy",
+  "description": "Student attendance tracker for Toppers Academy, featuring manual teacher logs, local Room DB persistence, and Firestore sync capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
