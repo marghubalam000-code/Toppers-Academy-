@@ -67,11 +67,14 @@ class MainActivity : ComponentActivity() {
             }
             MyApplicationTheme(darkTheme = useDarkTheme) {
                 val isAdminLoggedIn by viewModel.isAdminLoggedIn.collectAsState()
+                val isTeacherLoggedIn by viewModel.isTeacherLoggedIn.collectAsState()
                 val isStudentLoggedIn by viewModel.isStudentLoggedIn.collectAsState()
                 val welcomeUser by viewModel.welcomeUser.collectAsState()
                 
                 if (isAdminLoggedIn) {
                     MainAppLayout(viewModel = viewModel)
+                } else if (isTeacherLoggedIn) {
+                    TeacherDashboardScreen(viewModel = viewModel)
                 } else if (isStudentLoggedIn) {
                     StudentDashboardScreen(viewModel = viewModel)
                 } else {

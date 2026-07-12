@@ -530,4 +530,97 @@ class SupabaseSyncManager(private val context: Context) {
             Result.failure(e)
         }
     }
+
+    suspend fun fetchStudentByStudentId(studentId: String): Student? = withContext(Dispatchers.IO) {
+        val url = getSupabaseUrl()
+        val key = getSupabaseKey()
+        if (!isSupabaseConfigured() || studentId.isBlank()) return@withContext null
+
+        try {
+            val request = Request.Builder()
+                .url("$url/rest/v1/students?student_id=eq.$studentId")
+                .get()
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $key")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val jsonArray = JSONArray(bodyString)
+                    if (jsonArray.length() > 0) {
+                        val jsonObject = jsonArray.getJSONObject(0)
+                        Student(
+                            id = 0,
+                            studentId = jsonObject.optString("student_id"),
+                            name = jsonObject.optString("name"),
+                            fatherName = jsonObject.optString("father_name"),
+                            motherName = jsonObject.optString("mother_name"),
+                            mobile = jsonObject.optString("mobile"),
+                            email = jsonObject.optString("email"),
+                            studentClass = jsonObject.optString("student_class"),
+                            section = jsonObject.optString("section"),
+                            rollNumber = jsonObject.optString("roll_number"),
+                            gender = jsonObject.optString("gender"),
+                            dob = jsonObject.optString("dob"),
+                            address = jsonObject.optString("address"),
+                            aadhaar = jsonObject.optString("aadhaar"),
+                            admissionDate = jsonObject.optString("admission_date"),
+                            photo = jsonObject.optString("photo"),
+                            status = jsonObject.optString("status"),
+                            password = jsonObject.optString("password", ""),
+                            mainSubject = jsonObject.optString("main_subject", "")
+                        )
+                    } else null
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.e("SupabaseSyncManager", "Error fetching student $studentId: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun fetchAttendanceForStudent(studentId: String): List<AttendanceRecord>? = withContext(Dispatchers.IO) {
+        val url = getSupabaseUrl()
+        val key = getSupabaseKey()
+        if (!isSupabaseConfigured() || studentId.isBlank()) return@withContext null
+
+        try {
+            val request = Request.Builder()
+                .url("$url/rest/v1/attendance?student_id=eq.$studentId")
+                .get()
+                .addHeader("apikey", key)
+                .addHeader("Authorization", "Bearer $key")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyString = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val jsonArray = JSONArray(bodyString)
+                    val recordsList = mutableListOf<AttendanceRecord>()
+                    for (i in 0 until jsonArray.length()) {
+                        val jsonObject = jsonArray.getJSONObject(i)
+                        val record = AttendanceRecord(
+                            id = 0,
+                            attendanceId = jsonObject.optString("attendance_id"),
+                            studentId = jsonObject.optString("student_id"),
+                            studentName = jsonObject.optString("student_name"),
+                            studentClass = jsonObject.optString("student_class"),
+                            section = jsonObject.optString("section"),
+                            rollNumber = jsonObject.optString("roll_number"),
+                            date = jsonObject.optString("date"),
+                            status = jsonObject.optString("status"),
+                            createdAt = jsonObject.optLong("created_at", System.currentTimeMillis()),
+                            isSynced = true
+                        )
+                        recordsList.add(record)
+                    }
+                    recordsList
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.e("SupabaseSyncManager", "Error fetching attendance for $studentId: ${e.message}")
+            null
+        }
+    }
 }

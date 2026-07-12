@@ -1,11 +1,15 @@
 package com.example.ui.screens
 
 import android.net.Uri
+import android.content.Intent
+import android.util.Log
+import androidx.compose.ui.window.Dialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -59,6 +64,7 @@ fun StudentDashboardScreen(
     val context = LocalContext.current
     val student by viewModel.currentStudent.collectAsState()
     val appLogoUri by viewModel.appLogoUri.collectAsState()
+    val principalSignatureUri by viewModel.principalSignatureUri.collectAsState()
     
     // Safety check
     val activeStudent = student ?: return
@@ -73,10 +79,90 @@ fun StudentDashboardScreen(
 
     // Collect all attendance logs for this student
     val attendanceRecords by viewModel.getAttendanceForStudent(activeStudent.studentId).collectAsState(initial = emptyList())
+    val allChats by viewModel.allChatMessages.collectAsState()
+    val unreadChatCount = remember(allChats, activeStudent.studentId) {
+        allChats.count { it.studentId == activeStudent.studentId && it.sender != "Parent" && !it.isRead }
+    }
     var showDeveloperDialog by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(0) }
 
     val sharedPrefs = remember { context.getSharedPreferences("toppers_student_prefs", android.content.Context.MODE_PRIVATE) }
+    
+    val allMarks by viewModel.allMarks.collectAsState()
+    val myMarks = remember(allMarks, activeStudent.studentId) {
+        allMarks.filter { it.studentId == activeStudent.studentId }
+    }
+    
+    val studentNotifications = remember(attendanceRecords, myMarks) {
+        val list = mutableListOf<StudentNotification>()
+        
+        // 1. Attendance Notifications
+        attendanceRecords.forEach { record ->
+            list.add(
+                StudentNotification(
+                    id = "attendance_${record.id}",
+                    title = "Attendance Marked",
+                    description = "Your attendance for ${record.date} was marked as ${record.status}.",
+                    timestamp = record.createdAt,
+                    type = "attendance"
+                )
+            )
+        }
+        
+        // 2. Exam Marks Notifications
+        myMarks.forEach { mark ->
+            list.add(
+                StudentNotification(
+                    id = "mark_${mark.id}",
+                    title = "New Score Posted",
+                    description = "New marks posted for ${mark.subject} (${mark.examType}): ${mark.marksObtained.toInt()}/${mark.maxMarks.toInt()}.",
+                    timestamp = mark.lastUpdated,
+                    type = "score"
+                )
+            )
+        }
+        
+        list.sortByDescending { it.timestamp }
+        list
+    }
+    
+    var readNotificationIds by remember {
+        mutableStateOf(
+            sharedPrefs.getStringSet("read_notification_ids", emptySet()) ?: emptySet()
+        )
+    }
+    
+    val unreadNotificationsCount = remember(studentNotifications, readNotificationIds) {
+        studentNotifications.count { it.id !in readNotificationIds }
+    }
+    
+    var showNotificationsDialog by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(showNotificationsDialog) {
+        if (showNotificationsDialog && studentNotifications.isNotEmpty()) {
+            val newReadIds = readNotificationIds.toMutableSet()
+            studentNotifications.forEach { newReadIds.add(it.id) }
+            sharedPrefs.edit().putStringSet("read_notification_ids", newReadIds).apply()
+            readNotificationIds = newReadIds
+        }
+    }
+
+    // Automatically sync and refresh student portal data (attendance, fees etc.) in the background on startup/login
+    // and periodically poll for real-time updates without manual refresh
+    LaunchedEffect(activeStudent.studentId) {
+        viewModel.reloadStudentPortalData(activeStudent.studentId) { success ->
+            if (success) {
+                Log.d("StudentDashboardScreen", "Student portal data auto-synced successfully!")
+            } else {
+                Log.e("StudentDashboardScreen", "Student portal data auto-sync failed.")
+            }
+        }
+        // Periodic background silent poll every 4 seconds to sync attendance summaries dynamically
+        while (true) {
+            delay(4000)
+            viewModel.silentReloadStudentPortalData(activeStudent.studentId)
+        }
+    }
     var showFeesDialog by remember { mutableStateOf(false) }
     var showExamsDialog by remember { mutableStateOf(false) }
     var showClassworkDialog by remember { mutableStateOf(false) }
@@ -87,10 +173,12 @@ fun StudentDashboardScreen(
     var showStoreDialog by remember { mutableStateOf(false) }
     var showGalleryDialog by remember { mutableStateOf(false) }
     var showLeaveDialog by remember { mutableStateOf(false) }
+    var showParentChatDialog by remember { mutableStateOf(false) }
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
 
     var showPhotoEditDialog by remember { mutableStateOf(false) }
     var showPresetPicker by remember { mutableStateOf(false) }
+    var showIDCardDialog by remember { mutableStateOf(false) }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -226,6 +314,36 @@ fun StudentDashboardScreen(
                     }
 
                     IconButton(
+                        onClick = { showNotificationsDialog = true },
+                        modifier = Modifier.testTag("student_notifications_btn")
+                    ) {
+                        if (unreadNotificationsCount > 0) {
+                            BadgedBox(
+                                badge = {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
+                                    ) {
+                                        Text(unreadNotificationsCount.toString(), fontSize = 9.sp)
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Notifications,
+                                    contentDescription = "Notifications",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = "Notifications",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    IconButton(
                         onClick = {
                             Toast.makeText(context, "Reloading student data...", Toast.LENGTH_SHORT).show()
                             viewModel.reloadStudentPortalData(activeStudent.studentId) { success ->
@@ -351,6 +469,32 @@ fun StudentDashboardScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                             )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Card(
+                                onClick = { showIDCardDialog = true },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Badge,
+                                        contentDescription = "Badge Icon",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "View ID Card",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -454,12 +598,39 @@ fun StudentDashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text(
-                                    text = "Attendance Summary",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = calendarTextPrimary
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "Attendance Summary",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = calendarTextPrimary
+                                    )
+                                    // Modern elegant LIVE indicator
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFFE8F5E9))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF2E7D32))
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "LIVE",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF2E7D32)
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 val classText = if (activeStudent.studentClass.isNotBlank()) {
                                     "Class ${activeStudent.studentClass} (${activeStudent.section.ifBlank { "2025-27" }})"
@@ -767,7 +938,15 @@ fun StudentDashboardScreen(
                                     onClick = { showLeaveDialog = true },
                                     modifier = Modifier.weight(1f)
                                 )
-                                Spacer(modifier = Modifier.weight(1f))
+                                DashboardIcon(
+                                    icon = Icons.Default.Forum,
+                                    label = "Teacher Chat",
+                                    containerColor = if (isDark) Color(0xFF4A2B4D) else Color(0xFFFCE4EC),
+                                    iconColor = Color(0xFFD81B60),
+                                    onClick = { showParentChatDialog = true },
+                                    modifier = Modifier.weight(1f),
+                                    badgeCount = unreadChatCount
+                                )
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                         }
@@ -1056,6 +1235,15 @@ fun StudentDashboardScreen(
         )
     }
 
+    if (showIDCardDialog) {
+        StudentIDCardDialog(
+            student = activeStudent,
+            appLogoUri = appLogoUri,
+            principalSignatureUri = principalSignatureUri,
+            onDismiss = { showIDCardDialog = false }
+        )
+    }
+
     // Fullscreen Photo Viewer Dialog
     previewPhotoPath?.let { path ->
         AlertDialog(
@@ -1328,14 +1516,32 @@ fun StudentDashboardScreen(
         StudentFeesDialog(
             onDismiss = { showFeesDialog = false },
             viewModel = viewModel,
-            studentId = activeStudent.studentId
+            student = activeStudent
         )
     }
 
     if (showExamsDialog) {
         StudentExamsDialog(
             onDismiss = { showExamsDialog = false },
-            myExams = myExams
+            myExams = myExams,
+            viewModel = viewModel,
+            studentId = activeStudent.studentId,
+            studentName = activeStudent.name
+        )
+    }
+
+    if (showNotificationsDialog) {
+        StudentNotificationsDialog(
+            onDismiss = { showNotificationsDialog = false },
+            notifications = studentNotifications
+        )
+    }
+
+    if (showParentChatDialog) {
+        StudentParentChatDialog(
+            onDismiss = { showParentChatDialog = false },
+            viewModel = viewModel,
+            student = activeStudent
         )
     }
 
@@ -1425,29 +1631,44 @@ fun StatBox(label: String, value: String, color: Color) {
 
 @Composable
 fun BioRow(icon: ImageVector, label: String, value: String) {
+    val isPhone = label.contains("Mobile", ignoreCase = true) || label.contains("Phone", ignoreCase = true)
+    val context = LocalContext.current
+    val clickableModifier = if (isPhone && value.trim().isNotEmpty()) {
+        Modifier.clickable {
+            try {
+                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${value.trim()}"))
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not open dialer", Toast.LENGTH_SHORT).show()
+            }
+        }
+    } else {
+        Modifier
+    }
+
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(clickableModifier),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            tint = if (isPhone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             modifier = Modifier.size(16.dp)
         )
         Text(
             text = "$label:",
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            color = if (isPhone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             modifier = Modifier.width(90.dp)
         )
         Text(
             text = value,
             fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = if (isPhone) FontWeight.Bold else FontWeight.SemiBold,
+            color = if (isPhone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
     }
@@ -1555,6 +1776,7 @@ fun StatusPill(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardIcon(
     icon: ImageVector,
@@ -1562,7 +1784,8 @@ fun DashboardIcon(
     containerColor: Color,
     iconColor: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    badgeCount: Int = 0
 ) {
     Column(
         modifier = modifier
@@ -1577,12 +1800,32 @@ fun DashboardIcon(
                 .background(containerColor, RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = iconColor,
-                modifier = Modifier.size(26.dp)
-            )
+            if (badgeCount > 0) {
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ) {
+                            Text(badgeCount.toString(), fontSize = 9.sp)
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = iconColor,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = iconColor,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
         }
         Text(
             text = label,
@@ -1595,12 +1838,316 @@ fun DashboardIcon(
     }
 }
 
+private fun launchDirectUpi(context: android.content.Context, upiId: String, upiName: String, amount: Double, title: String, studentId: String, appPackage: String?) {
+    if (upiId.isEmpty()) {
+        Toast.makeText(context, "UPI ID is not configured by the school.", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val note = "$title - $studentId"
+        // VPA (upiId) must NOT be URL-encoded (especially the '@' symbol).
+        // If encoded, PhonePe and other UPI apps throw a "Security Reason" or "Untrusted Source/Link" error.
+        val cleanUpiId = upiId.trim()
+        
+        // Encode payee name and note but replace '+' with '%20' as some UPI apps fail to parse '+' correctly.
+        val cleanName = java.net.URLEncoder.encode(upiName.ifEmpty { "School" }.trim(), "UTF-8").replace("+", "%20")
+        val cleanNote = java.net.URLEncoder.encode(note.trim(), "UTF-8").replace("+", "%20")
+        val formattedAmount = String.format(java.util.Locale.US, "%.2f", amount)
+        
+        // Construct standard UPI deep link
+        val upiUriString = "upi://pay?pa=$cleanUpiId&pn=$cleanName&am=$formattedAmount&cu=INR&tn=$cleanNote"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(upiUriString))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        
+        if (appPackage != null) {
+            intent.setPackage(appPackage)
+        }
+        
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        if (appPackage != null) {
+            // Fallback to standard chooser if specific app is not installed
+            try {
+                val note = "$title - $studentId"
+                val cleanUpiId = upiId.trim()
+                val cleanName = java.net.URLEncoder.encode(upiName.ifEmpty { "School" }.trim(), "UTF-8").replace("+", "%20")
+                val cleanNote = java.net.URLEncoder.encode(note.trim(), "UTF-8").replace("+", "%20")
+                val formattedAmount = String.format(java.util.Locale.US, "%.2f", amount)
+                val upiUriString = "upi://pay?pa=$cleanUpiId&pn=$cleanName&am=$formattedAmount&cu=INR&tn=$cleanNote"
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(upiUriString))
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            } catch (ex: Exception) {
+                val appName = if (appPackage.contains("paytm")) "Paytm" else "PhonePe"
+                Toast.makeText(context, "$appName is not installed or UPI is not supported on this device.", Toast.LENGTH_LONG).show()
+            }
+        } else {
+            Toast.makeText(context, "Error launching UPI application: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+private fun saveBitmapToGallery(context: android.content.Context, bitmap: android.graphics.Bitmap, filename: String): android.net.Uri? {
+    val contentResolver = context.contentResolver
+    val contentValues = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "$filename.jpg")
+        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/SchoolPayments")
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+    }
+
+    val imageUri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+    if (imageUri != null) {
+        try {
+            contentResolver.openOutputStream(imageUri).use { out ->
+                if (out != null) {
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
+                }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(imageUri, contentValues, null, null)
+            }
+            return imageUri
+        } catch (e: Exception) {
+            android.util.Log.e("SaveBitmap", "Error saving image: ${e.message}", e)
+            try {
+                contentResolver.delete(imageUri, null, null)
+            } catch (ex: Exception) {}
+        }
+    }
+    return null
+}
+
+private fun downloadAndSaveQrCard(
+    context: android.content.Context,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    qrUrl: String,
+    appLogoUri: String,
+    upiName: String,
+    upiId: String,
+    feeTitle: String,
+    amount: Double
+) {
+    Toast.makeText(context, "Downloading scanner... / स्कैनर डाउनलोड हो रहा है...", Toast.LENGTH_SHORT).show()
+    
+    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val loader = coil.ImageLoader(context)
+            
+            // 1. Fetch QR Code Bitmap
+            val qrRequest = coil.request.ImageRequest.Builder(context)
+                .data(qrUrl)
+                .allowHardware(false)
+                .build()
+            val qrResult = (loader.execute(qrRequest) as? coil.request.SuccessResult)?.drawable
+            val qrBitmap = (qrResult as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            
+            if (qrBitmap == null) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to load QR scanner image. / स्कैनर लोड करने में विफल।", Toast.LENGTH_LONG).show()
+                }
+                return@launch
+            }
+            
+            // 2. Fetch Logo Bitmap if available
+            var logoBitmap: android.graphics.Bitmap? = null
+            if (appLogoUri.isNotEmpty()) {
+                val logoRequest = coil.request.ImageRequest.Builder(context)
+                    .data(appLogoUri)
+                    .allowHardware(false)
+                    .build()
+                val logoResult = (loader.execute(logoRequest) as? coil.request.SuccessResult)?.drawable
+                logoBitmap = (logoResult as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            }
+            
+            // 3. Create Custom Card Canvas & Draw
+            val width = 600
+            val height = 830
+            val cardBitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(cardBitmap)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            
+            // Background: Solid White
+            canvas.drawColor(android.graphics.Color.WHITE)
+            
+            // Draw a stylish header background (Dark Navy blue)
+            val headerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#0F172A") // Slate 900
+                style = android.graphics.Paint.Style.FILL
+            }
+            canvas.drawRect(0f, 0f, width.toFloat(), 140f, headerPaint)
+            
+            // Draw academy logo inside header on the left
+            var textXStart = 40f
+            if (logoBitmap != null) {
+                // scale logo to fit 80x80
+                val scaledLogo = android.graphics.Bitmap.createScaledBitmap(logoBitmap, 90, 90, true)
+                val logoX = 40f
+                val logoY = 25f
+                
+                val logoPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                canvas.drawBitmap(scaledLogo, logoX, logoY, logoPaint)
+                textXStart = 150f
+            } else {
+                // Draw a beautiful default circular icon
+                val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.parseColor("#3B82F6") // Blue 500
+                    style = android.graphics.Paint.Style.FILL
+                }
+                canvas.drawCircle(85f, 70f, 40f, circlePaint)
+                val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 38f
+                    typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                }
+                canvas.drawText("A", 71f, 84f, textPaint)
+                textXStart = 150f
+            }
+            
+            // Draw Academy Name
+            val academyName = upiName.ifEmpty { "Toppers Academy" }
+            val namePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                textSize = 30f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            }
+            
+            // Truncate academy name if too long
+            var truncatedName = academyName
+            if (namePaint.measureText(truncatedName) > (width - textXStart - 30f)) {
+                while (truncatedName.length > 5 && namePaint.measureText("$truncatedName...") > (width - textXStart - 30f)) {
+                    truncatedName = truncatedName.substring(0, truncatedName.length - 1)
+                }
+                truncatedName = "$truncatedName..."
+            }
+            canvas.drawText(truncatedName, textXStart, 70f, namePaint)
+            
+            // Draw Academy Subtitle
+            val subtitlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#94A3B8") // Slate 400
+                textSize = 18f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+            }
+            canvas.drawText("Official UPI Payment Code / आधिकारिक कोड", textXStart, 110f, subtitlePaint)
+            
+            // Draw outer border card
+            val borderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#E2E8F0") // Slate 200
+                strokeWidth = 3f
+                style = android.graphics.Paint.Style.STROKE
+            }
+            canvas.drawRect(1.5f, 1.5f, width.toFloat() - 1.5f, height.toFloat() - 1.5f, borderPaint)
+            
+            // Draw QR Code centered (scaled to 380x380)
+            val qrScaled = android.graphics.Bitmap.createScaledBitmap(qrBitmap, 380, 380, true)
+            val qrX = (width - 380f) / 2
+            val qrY = 170f
+            canvas.drawBitmap(qrScaled, qrX, qrY, paint)
+            
+            // Draw "Scan using any UPI App / किसी भी UPI ऐप से स्कैन करें"
+            val scanTextPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#475569") // Slate 600
+                textSize = 18f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            }
+            val scanText = "Scan with Paytm, PhonePe, GPay, BHIM & more"
+            val scanTextWidth = scanTextPaint.measureText(scanText)
+            canvas.drawText(scanText, (width - scanTextWidth) / 2, 585f, scanTextPaint)
+            
+            // Draw beautiful divider line
+            val dividerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#E2E8F0")
+                strokeWidth = 2f
+            }
+            canvas.drawLine(40f, 615f, width - 40f, 615f, dividerPaint)
+            
+            // Draw Amount and Title Box details
+            val feeLabelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#64748B") // Slate 500
+                textSize = 18f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+            }
+            canvas.drawText("Fee Purpose / शुल्क का प्रकार:", 60f, 650f, feeLabelPaint)
+            
+            val feeValPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#1E293B") // Slate 800
+                textSize = 22f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            }
+            var dispTitle = feeTitle
+            if (feeValPaint.measureText(dispTitle) > 280f) {
+                while (dispTitle.length > 5 && feeValPaint.measureText("$dispTitle...") > 280f) {
+                    dispTitle = dispTitle.substring(0, dispTitle.length - 1)
+                }
+                dispTitle = "$dispTitle..."
+            }
+            canvas.drawText(dispTitle, 60f, 685f, feeValPaint)
+            
+            // Draw UPI ID
+            val upiLabelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#64748B")
+                textSize = 16f
+            }
+            canvas.drawText("UPI VPA: $upiId", 60f, 730f, upiLabelPaint)
+            
+            // Draw Amount details on the right side
+            val amountLabelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#64748B")
+                textSize = 18f
+                textAlign = android.graphics.Paint.Align.RIGHT
+            }
+            canvas.drawText("Amount to Pay / राशि:", width - 60f, 650f, amountLabelPaint)
+            
+            val amountValPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#059669") // Green 600
+                textSize = 34f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                textAlign = android.graphics.Paint.Align.RIGHT
+            }
+            canvas.drawText("₹$amount", width - 60f, 695f, amountValPaint)
+            
+            // Draw bottom disclaimer
+            val disclaimerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.parseColor("#94A3B8")
+                textSize = 14f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.ITALIC)
+            }
+            val discText1 = "This is a secure auto-generated student payment QR scanner code."
+            canvas.drawText(discText1, (width - disclaimerPaint.measureText(discText1)) / 2, 780f, disclaimerPaint)
+            val discText2 = "Thank you for supporting our Academy!"
+            canvas.drawText(discText2, (width - disclaimerPaint.measureText(discText2)) / 2, 800f, disclaimerPaint)
+            
+            // 4. Save to gallery/Pictures
+            val filename = "${academyName.replace("\\s+".toRegex(), "_")}_Scanner_${System.currentTimeMillis()}"
+            val savedUri = saveBitmapToGallery(context, cardBitmap, filename)
+            
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                if (savedUri != null) {
+                    Toast.makeText(context, "✅ Scanner saved to Gallery! / स्कैनर गैलरी में सेव हो गया!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "❌ Failed to save scanner. Please try again.", Toast.LENGTH_LONG).show()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DownloadQR", "Error building or downloading QR: ${e.message}", e)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                Toast.makeText(context, "Error downloading scanner: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+}
+
 @Composable
 fun StudentFeesDialog(
     onDismiss: () -> Unit,
     viewModel: com.example.ui.viewmodel.AttendanceViewModel,
-    studentId: String
+    student: com.example.data.model.Student
 ) {
+    val studentId = student.studentId
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -1612,8 +2159,38 @@ fun StudentFeesDialog(
     val upiId by viewModel.upiId.collectAsState()
     val upiName by viewModel.upiName.collectAsState()
     val upiQrUrl by viewModel.upiQrUrl.collectAsState()
+    val appLogoUri by viewModel.appLogoUri.collectAsState()
 
     var activePaymentFee by remember { mutableStateOf<com.example.data.model.FeeRecord?>(null) }
+    var activeReceiptFee by remember { mutableStateOf<com.example.data.model.FeeRecord?>(null) }
+    var useDynamicQr by remember(upiId) { mutableStateOf(upiId.isNotEmpty()) }
+    var showEnlargedQr by remember { mutableStateOf(false) }
+    
+    val upiLink = remember(upiId, upiName, activePaymentFee) {
+        val targetFee = activePaymentFee
+        if (targetFee != null && upiId.isNotEmpty()) {
+            try {
+                val cleanUpiId = upiId.trim()
+                val cleanName = java.net.URLEncoder.encode(upiName.ifEmpty { "School" }.trim(), "UTF-8").replace("+", "%20")
+                val cleanNote = java.net.URLEncoder.encode("${targetFee.title} - ${studentId}", "UTF-8").replace("+", "%20")
+                val formattedAmount = String.format(java.util.Locale.US, "%.2f", targetFee.amount)
+                "upi://pay?pa=$cleanUpiId&pn=$cleanName&am=$formattedAmount&cu=INR&tn=$cleanNote"
+            } catch (e: Exception) {
+                ""
+            }
+        } else {
+            ""
+        }
+    }
+
+    val dynamicQrUrl = remember(upiLink) {
+        if (upiLink.isNotEmpty()) {
+            "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${java.net.URLEncoder.encode(upiLink, "UTF-8")}"
+        } else {
+            ""
+        }
+    }
+
     var transactionIdInput by remember { mutableStateOf("") }
     var screenshotUriState by remember { mutableStateOf<Uri?>(null) }
     var isUploadingReceipt by remember { mutableStateOf(false) }
@@ -1695,7 +2272,7 @@ fun StudentFeesDialog(
                         if (paidFees.isNotEmpty()) {
                             Text("Cleared Fees:", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFF10B981))
                             paidFees.forEach { fee ->
-                                FeeDemandCard(fee = fee, onPay = {})
+                                FeeDemandCard(fee = fee, onPay = {}, onViewReceipt = { activeReceiptFee = fee })
                             }
                         }
                     }
@@ -1716,34 +2293,369 @@ fun StudentFeesDialog(
 
                     Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
 
-                    Text(text = "Scan QR Code or Use UPI details below:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "Scan QR Code to Pay:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        
+                        // Small toggle switch/button if upiId and upiQrUrl are both present
+                        if (upiId.isNotEmpty() && upiQrUrl.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { useDynamicQr = !useDynamicQr }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (useDynamicQr) Icons.Default.Lock else Icons.Default.QrCode,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = if (useDynamicQr) "Using Locked QR" else "Using Static QR",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
 
                     // QR scanner box
-                    Box(
-                        modifier = Modifier
-                            .size(200.dp)
-                            .align(Alignment.CenterHorizontally)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (upiQrUrl.isNotEmpty()) {
-                            AsyncImage(
-                                model = upiQrUrl,
-                                contentDescription = "Admin QR Scanner",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-                        } else {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(16.dp)
+                        // Beautiful Academy Logo & Name Header on the Scanner UI
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("No QR scanner uploaded", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (appLogoUri.isNotEmpty()) {
+                                    AsyncImage(
+                                        model = appLogoUri,
+                                        contentDescription = "Academy Logo",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.School,
+                                        contentDescription = "Default School Logo",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
+                            Text(
+                                text = upiName.ifEmpty { "Toppers Academy" },
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(210.dp)
+                                .shadow(4.dp, shape = RoundedCornerShape(16.dp))
+                                .background(Color.White, RoundedCornerShape(16.dp))
+                                .clickable { showEnlargedQr = true }
+                                .padding(8.dp)
+                                .border(1.5.dp, if (useDynamicQr && upiId.isNotEmpty()) Color(0xFF10B981) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val qrModelToLoad = if (useDynamicQr && dynamicQrUrl.isNotEmpty()) {
+                                dynamicQrUrl
+                            } else {
+                                upiQrUrl
+                            }
+
+                            if (qrModelToLoad.isNotEmpty()) {
+                                AsyncImage(
+                                    model = qrModelToLoad,
+                                    contentDescription = "Payment QR Scanner",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCode,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "No QR scanner available",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        // Options Row: Zoom & Download
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { showEnlargedQr = true }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ZoomIn,
+                                    contentDescription = "Enlarge",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "🔍 Zoom / बड़ा करें",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .height(12.dp)
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        val qrToDl = if (useDynamicQr && dynamicQrUrl.isNotEmpty()) {
+                                            dynamicQrUrl
+                                        } else {
+                                            upiQrUrl
+                                        }
+                                        if (qrToDl.isNotEmpty()) {
+                                            downloadAndSaveQrCard(
+                                                context = context,
+                                                coroutineScope = coroutineScope,
+                                                qrUrl = qrToDl,
+                                                appLogoUri = appLogoUri,
+                                                upiName = upiName,
+                                                upiId = upiId,
+                                                feeTitle = targetFee.title,
+                                                amount = targetFee.amount
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "QR Scanner is not ready.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Download Scanner",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "📥 Download / डाउनलोड",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        // Beautiful locked badge/reassurance for dynamic QR
+                        if (useDynamicQr && upiId.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFD1FAE5), // Light green background
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Locked",
+                                        tint = Color(0xFF065F46),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "QR Locked to exact amount: ₹${targetFee.amount}",
+                                        color = Color(0xFF065F46),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Direct App Payment Section
+                    Text(
+                        text = "Pay Directly via App (Auto-Locked Amount):",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // PhonePe Button
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .clickable {
+                                    launchDirectUpi(
+                                        context = context,
+                                        upiId = upiId,
+                                        upiName = upiName,
+                                        amount = targetFee.amount,
+                                        title = targetFee.title,
+                                        studentId = studentId,
+                                        appPackage = "com.phonepe.app"
+                                    )
+                                },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF5F259F)), // PhonePe Purple
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FlashOn,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "PhonePe",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+
+                        // Paytm Button
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .clickable {
+                                    launchDirectUpi(
+                                        context = context,
+                                        upiId = upiId,
+                                        upiName = upiName,
+                                        amount = targetFee.amount,
+                                        title = targetFee.title,
+                                        studentId = studentId,
+                                        appPackage = "net.one97.paytm"
+                                    )
+                                },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF002970)), // Paytm Deep Blue
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalanceWallet,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Paytm",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Other UPI Apps / General chooser
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .clickable {
+                                launchDirectUpi(
+                                    context = context,
+                                    upiId = upiId,
+                                    upiName = upiName,
+                                    amount = targetFee.amount,
+                                    title = targetFee.title,
+                                    studentId = studentId,
+                                    appPackage = null
+                                )
+                            },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Payments,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Other UPI App (GPay, BHIM, etc.)",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
                         }
                     }
 
@@ -1862,12 +2774,144 @@ fun StudentFeesDialog(
             }
         }
     )
+
+    if (activeReceiptFee != null) {
+        StudentPaymentReceiptDialog(
+            student = student,
+            fee = activeReceiptFee!!,
+            onDismiss = { activeReceiptFee = null }
+        )
+    }
+
+    if (showEnlargedQr && activePaymentFee != null) {
+        val qrModelToLoad = if (useDynamicQr && dynamicQrUrl.isNotEmpty()) {
+            dynamicQrUrl
+        } else {
+            upiQrUrl
+        }
+        Dialog(onDismissRequest = { showEnlargedQr = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (appLogoUri.isNotEmpty()) {
+                                    AsyncImage(
+                                        model = appLogoUri,
+                                        contentDescription = "Academy Logo",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.School,
+                                        contentDescription = "Default School Logo",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = upiName.ifEmpty { "Toppers Academy" },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color.Black
+                                )
+                                Text(
+                                    text = "Scan to Pay / स्कैन करें",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                        IconButton(onClick = { showEnlargedQr = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(280.dp)
+                            .border(1.dp, Color.LightGray, RoundedCornerShape(16.dp))
+                            .padding(12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = qrModelToLoad,
+                            contentDescription = "Enlarged QR Code",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                    Text(
+                        text = "Amount: ₹${activePaymentFee!!.amount}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Button(
+                        onClick = {
+                            if (qrModelToLoad.isNotEmpty()) {
+                                downloadAndSaveQrCard(
+                                    context = context,
+                                    coroutineScope = coroutineScope,
+                                    qrUrl = qrModelToLoad,
+                                    appLogoUri = appLogoUri,
+                                    upiName = upiName,
+                                    upiId = upiId,
+                                    feeTitle = activePaymentFee!!.title,
+                                    amount = activePaymentFee!!.amount
+                                )
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Download, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Download QR Scanner / डाउनलोड करें", fontWeight = FontWeight.Bold)
+                    }
+
+                    Text(
+                        text = "Take a screenshot or click 'Download' to save the official QR card with the Academy logo to pay using Paytm, PhonePe or GPay.",
+                        textAlign = TextAlign.Center,
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
 fun FeeDemandCard(
     fee: com.example.data.model.FeeRecord,
-    onPay: () -> Unit
+    onPay: () -> Unit,
+    onViewReceipt: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1925,6 +2969,20 @@ fun FeeDemandCard(
                         Text(if (fee.status == "Rejected") "Retry Pay" else "Pay Now", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
+
+                if (fee.status == "Paid" && onViewReceipt != null) {
+                    Button(
+                        onClick = onViewReceipt,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("View Receipt", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
 
             if (fee.status == "Rejected" && fee.rejectionReason.isNotEmpty()) {
@@ -1939,12 +2997,81 @@ fun FeeDemandCard(
     }
 }
 
+fun downloadScoreCard(context: android.content.Context, studentName: String, examType: String, marksList: List<com.example.data.model.ExamMark>) {
+    try {
+        val totalObt = marksList.sumOf { it.marksObtained }
+        val totalMax = marksList.sumOf { it.maxMarks }
+        val percent = if (totalMax > 0) (totalObt / totalMax) * 100 else 0.0
+        val grade = when {
+            percent >= 90 -> "A+"
+            percent >= 80 -> "A"
+            percent >= 70 -> "B"
+            percent >= 60 -> "C"
+            percent >= 50 -> "D"
+            else -> "F"
+        }
+
+        val reportContent = """
+            ==================================================
+                        TOPPERS ACADEMY SCORE CARD
+            ==================================================
+            Student Name : ${studentName.uppercase(Locale.getDefault())}
+            Exam Term    : ${examType.uppercase(Locale.getDefault())}
+            Status       : Official & Published
+            --------------------------------------------------
+            Subject            Marks Obtained / Max Marks
+            --------------------------------------------------
+            ${marksList.joinToString("\n") { mk ->
+                val padSub = mk.subject.padEnd(18)
+                "$padSub : ${mk.marksObtained.toInt()} / ${mk.maxMarks.toInt()}"
+            }}
+            --------------------------------------------------
+            Total Marks  : ${totalObt.toInt()} / ${totalMax.toInt()}
+            Percentage   : ${String.format("%.1f", percent)}%
+            Final Grade  : $grade
+            ==================================================
+            Generated on : ${SimpleDateFormat("dd-MMM-yyyy HH:mm", Locale.getDefault()).format(Date())}
+            ==================================================
+        """.trimIndent()
+
+        // Use modern MediaStore Downloads directory integration
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "ScoreCard_${studentName.replace(" ", "_")}_$examType.txt")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+            }
+        }
+
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+        if (uri != null) {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                outputStream.write(reportContent.toByteArray())
+            }
+            Toast.makeText(context, "Score Card downloaded to Downloads folder!", Toast.LENGTH_LONG).show()
+        } else {
+            // Fallback for internal sandbox storage download
+            val downloadsDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val file = java.io.File(downloadsDir, "ScoreCard_${studentName.replace(" ", "_")}_$examType.txt")
+            file.writeText(reportContent)
+            Toast.makeText(context, "Score Card saved: ${file.name}", Toast.LENGTH_LONG).show()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Error downloading Score Card: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
 @Composable
 fun StudentExamsDialog(
     onDismiss: () -> Unit,
-    myExams: List<ExamSchedule>
+    myExams: List<ExamSchedule>,
+    viewModel: AttendanceViewModel,
+    studentId: String,
+    studentName: String
 ) {
-    var selectedExamTab by remember { mutableStateOf(0) } // 0: Datesheet, 1: Syllabus
+    var selectedExamTab by remember { mutableStateOf(0) } // 0: Datesheet, 1: Syllabus, 2: Report Card
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1970,10 +3097,13 @@ fun StudentExamsDialog(
             ) {
                 TabRow(selectedTabIndex = selectedExamTab, modifier = Modifier.fillMaxWidth()) {
                     Tab(selected = selectedExamTab == 0, onClick = { selectedExamTab = 0 }) {
-                        Text("Datesheet", fontSize = 12.sp, modifier = Modifier.padding(10.dp), fontWeight = FontWeight.Bold)
+                        Text("Datesheet", fontSize = 10.sp, modifier = Modifier.padding(6.dp), fontWeight = FontWeight.Bold)
                     }
                     Tab(selected = selectedExamTab == 1, onClick = { selectedExamTab = 1 }) {
-                        Text("Syllabus", fontSize = 12.sp, modifier = Modifier.padding(10.dp), fontWeight = FontWeight.Bold)
+                        Text("Syllabus", fontSize = 10.sp, modifier = Modifier.padding(6.dp), fontWeight = FontWeight.Bold)
+                    }
+                    Tab(selected = selectedExamTab == 2, onClick = { selectedExamTab = 2 }) {
+                        Text("Report Card", fontSize = 10.sp, modifier = Modifier.padding(6.dp), fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -1997,13 +3127,105 @@ fun StudentExamsDialog(
                                 }
                             }
                         }
-                    } else {
+                    } else if (selectedExamTab == 1) {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("Exam Syllabi for Term-1:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             
                             SyllabusAccordion("Mathematics", listOf("Unit 1: Real Numbers & Linear Equations", "Unit 2: Quadratic Equations & Progressions", "Unit 3: Trigonometry Identities"))
                             SyllabusAccordion("General Science", listOf("Unit 1: Chemical Reactions & Acids", "Unit 2: Carbon and its Compounds", "Unit 3: Light Reflection & Human Eye"))
                             SyllabusAccordion("English Literature", listOf("Prose: Merchant of Venice - Acts I & II", "Poetry: Daffodils, The Patriot", "Grammar: Direct & Indirect Speech, Voice"))
+                        }
+                    } else {
+                        // Display the beautiful digital report card!
+                        val allMarks by viewModel.allMarks.collectAsState()
+                        val myMarks = remember(allMarks, studentId) {
+                            allMarks.filter { it.studentId == studentId }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("Official Digital Report Card", fontWeight = FontWeight.Black, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            
+                            val examsGrouped = myMarks.groupBy { it.examType }
+                            if (examsGrouped.isEmpty()) {
+                                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                    Text("No report cards published yet by class teacher.", color = Color.Gray, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                }
+                            } else {
+                                examsGrouped.forEach { (exam, marksList) ->
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(exam, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                                                
+                                                val totalObt = marksList.sumOf { it.marksObtained }
+                                                val totalMax = marksList.sumOf { it.maxMarks }
+                                                val percent = if (totalMax > 0) (totalObt / totalMax) * 100 else 0.0
+                                                val grade = when {
+                                                    percent >= 90 -> "A+"
+                                                    percent >= 80 -> "A"
+                                                    percent >= 70 -> "B"
+                                                    percent >= 60 -> "C"
+                                                    percent >= 50 -> "D"
+                                                    else -> "F"
+                                                }
+                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    Badge(containerColor = if (percent >= 50) Color(0xFF00C853) else Color.Red) {
+                                                        Text(
+                                                            "${String.format("%.1f", percent)}% ($grade)",
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color.White,
+                                                            fontSize = 10.sp
+                                                        )
+                                                    }
+                                                    val localContext = LocalContext.current
+                                                    IconButton(
+                                                        onClick = {
+                                                            downloadScoreCard(localContext, studentName, exam, marksList)
+                                                        },
+                                                        modifier = Modifier.size(28.dp).testTag("download_scorecard_btn_${exam}")
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Download,
+                                                            contentDescription = "Download Score Card",
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            HorizontalDivider(thickness = 0.5.dp)
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            marksList.forEach { mk ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column {
+                                                        Text(mk.subject, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                        if (mk.remarks.isNotEmpty()) {
+                                                            Text(mk.remarks, fontSize = 9.sp, color = Color.Gray)
+                                                        }
+                                                    }
+                                                    Text("${mk.marksObtained.toInt()} / ${mk.maxMarks.toInt()}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3570,4 +4792,910 @@ fun downloadFileToPublicDownloads(context: android.content.Context, filePath: St
     }
     
     return null
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StudentParentChatDialog(
+    onDismiss: () -> Unit,
+    viewModel: AttendanceViewModel,
+    student: Student
+) {
+    var chatText by remember { mutableStateOf("") }
+    val allChats by viewModel.allChatMessages.collectAsState()
+    val studentChats = remember(allChats, student.studentId) {
+        allChats.filter { it.studentId == student.studentId }
+    }
+
+    LaunchedEffect(student.studentId, allChats) {
+        viewModel.markMessagesForParentAsRead(student.studentId)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Forum, contentDescription = null, tint = Color(0xFFD81B60), modifier = Modifier.size(24.dp))
+                    Text("Teacher-Parent Chat", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Secure direct messaging with your child's class teacher.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                        .padding(8.dp)
+                ) {
+                    if (studentChats.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No messages yet. Send a message to start.", fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            reverseLayout = false
+                        ) {
+                            items(studentChats) { chat ->
+                                val isMe = chat.sender == "Parent" || chat.sender == "Student"
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(
+                                                RoundedCornerShape(
+                                                    topStart = 12.dp,
+                                                    topEnd = 12.dp,
+                                                    bottomStart = if (isMe) 12.dp else 2.dp,
+                                                    bottomEnd = if (isMe) 2.dp else 12.dp
+                                                )
+                                            )
+                                            .background(
+                                                if (isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                            .padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = chat.message,
+                                            color = if (isMe) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Text(
+                                        text = chat.senderName,
+                                        fontSize = 8.sp,
+                                        color = Color.Gray,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = chatText,
+                        onValueChange = { chatText = it },
+                        placeholder = { Text("Ask the teacher...", fontSize = 12.sp) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                    IconButton(
+                        onClick = {
+                            if (chatText.trim().isNotEmpty()) {
+                                viewModel.sendChatMessage(
+                                    studentId = student.studentId,
+                                    studentName = student.name,
+                                    sender = "Parent",
+                                    senderName = "${student.name}'s Parent",
+                                    msgText = chatText.trim()
+                                )
+                                chatText = ""
+                            }
+                        },
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .testTag("parent_send_chat_btn")
+                    ) {
+                        Icon(imageVector = Icons.Default.Send, contentDescription = "Send", tint = Color.White, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
+}
+
+data class StudentNotification(
+    val id: String,
+    val title: String,
+    val description: String,
+    val timestamp: Long,
+    val type: String // "attendance" or "score"
+)
+
+@Composable
+fun StudentNotificationsDialog(
+    onDismiss: () -> Unit,
+    notifications: List<StudentNotification>
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text("Notifications", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (notifications.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No new notifications.",
+                            fontSize = 13.sp,
+                            color = Color.Gray,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(notifications) { notification ->
+                            val itemBgColor = if (MaterialTheme.colorScheme.background == com.example.ui.theme.DarkBackground) {
+                                Color(0xFF1E2129)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            }
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = itemBgColor)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val icon = if (notification.type == "attendance") {
+                                        Icons.Default.CalendarToday
+                                    } else {
+                                        Icons.Default.FactCheck
+                                    }
+                                    val iconTint = if (notification.type == "attendance") {
+                                        Color(0xFF00C853)
+                                    } else {
+                                        Color(0xFF2979FF)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(iconTint.copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = null,
+                                            tint = iconTint,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = notification.title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = notification.description,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        val formattedTime = remember(notification.timestamp) {
+                                            val sdf = SimpleDateFormat("dd-MMM-yyyy, hh:mm a", Locale.getDefault())
+                                            sdf.format(Date(notification.timestamp))
+                                        }
+                                        Text(
+                                            text = formattedTime,
+                                            fontSize = 9.sp,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+@Composable
+fun AcademyLogo(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(Color(0xFF1E3A8A), Color(0xFF3B82F6))
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.School,
+                contentDescription = "Academy Logo",
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+            Text(
+                text = "TOPPERS",
+                color = Color.White,
+                fontSize = 6.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun StudentPaymentReceiptDialog(
+    student: com.example.data.model.Student,
+    fee: com.example.data.model.FeeRecord,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+                .shadow(12.dp, shape = RoundedCornerShape(20.dp)),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Header (Academy Logo & Name)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    AcademyLogo()
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "TOPPERS ACADEMY",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            text = "Official Payment Receipt",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), thickness = 1.dp)
+
+                // Status Badge & Receipt Number
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Receipt Number",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "REC-${fee.feeId.takeLast(6).uppercase()}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    
+                    // Approved paid stamp
+                    Surface(
+                        color = Color(0xFFD1FAE5),
+                        contentColor = Color(0xFF065F46),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF059669))
+                            Text("PAID & VERIFIED", fontSize = 10.sp, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), thickness = 1.dp)
+
+                // Student Academic Info
+                Text("STUDENT PROFILE DETAILS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ReceiptRow(label = "Student ID", value = student.studentId)
+                    ReceiptRow(label = "Student Name", value = student.name)
+                    ReceiptRow(label = "Class & Section", value = "Class ${student.studentClass} (${student.section})")
+                    ReceiptRow(label = "Roll Number", value = student.rollNumber)
+                    ReceiptRow(label = "Date of Birth", value = student.dob.ifBlank { "N/A" })
+                }
+
+                // Payment Details
+                Text("TRANSACTION INFORMATION", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ReceiptRow(label = "Fee Category", value = fee.title)
+                    ReceiptRow(label = "Transaction ID", value = fee.transactionId)
+                    ReceiptRow(label = "Paid Date", value = fee.paymentDate)
+                    ReceiptRow(label = "UPI Destination", value = fee.upiUsed)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Paid Amount", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("₹${fee.amount}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Official Seal / Footnote
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(Icons.Default.Verified, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                    Text(
+                        text = "Toppers Academy Digital Seal",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "This is a computer-generated official payment receipt.",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Actions (Download Options)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                downloadFeeReceiptAsPDF(context, student, fee)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.PictureAsPdf, contentDescription = "PDF", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Download PDF", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+
+                        Button(
+                            onClick = {
+                                downloadFeeReceiptAsImage(context, student, fee)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = "Photo/Gallery", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save to Gallery", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Close / बंद करें", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ReceiptRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text = value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+fun downloadFeeReceiptAsPDF(
+    context: android.content.Context,
+    student: com.example.data.model.Student,
+    fee: com.example.data.model.FeeRecord
+) {
+    try {
+        val pdfDocument = android.graphics.pdf.PdfDocument()
+        // A4 size: 595 x 842
+        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(595, 842, 1).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+
+        drawReceiptOnCanvas(context, canvas, 595, 842, student, fee, isForImage = false)
+
+        pdfDocument.finishPage(page)
+
+        val filename = "FeeReceipt_REC-${fee.feeId.takeLast(6).uppercase(Locale.getDefault())}.pdf"
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+            }
+        }
+
+        val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+        if (uri != null) {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                pdfDocument.writeTo(outputStream)
+            }
+            Toast.makeText(context, "PDF Receipt downloaded to Downloads folder! ✅", Toast.LENGTH_LONG).show()
+        } else {
+            val downloadsDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val file = java.io.File(downloadsDir, filename)
+            java.io.FileOutputStream(file).use { outputStream ->
+                pdfDocument.writeTo(outputStream)
+            }
+            Toast.makeText(context, "PDF Receipt saved: ${file.name} ✅", Toast.LENGTH_LONG).show()
+        }
+        pdfDocument.close()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Error saving PDF: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun downloadFeeReceiptAsImage(
+    context: android.content.Context,
+    student: com.example.data.model.Student,
+    fee: com.example.data.model.FeeRecord
+) {
+    try {
+        val width = 800
+        val height = 1200
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+
+        drawReceiptOnCanvas(context, canvas, width, height, student, fee, isForImage = true)
+
+        val filename = "FeeReceipt_REC-${fee.feeId.takeLast(6).uppercase(Locale.getDefault())}.png"
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/ToppersAcademy")
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+        if (uri != null) {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, outputStream)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            }
+            Toast.makeText(context, "Receipt image saved to Gallery successfully! ✅", Toast.LENGTH_LONG).show()
+        } else {
+            val picturesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
+            val toppersDir = java.io.File(picturesDir, "ToppersAcademy")
+            if (!toppersDir.exists()) toppersDir.mkdirs()
+            val file = java.io.File(toppersDir, filename)
+            java.io.FileOutputStream(file).use { outputStream ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, outputStream)
+            }
+            Toast.makeText(context, "Receipt image saved to Pictures: ${file.name} ✅", Toast.LENGTH_LONG).show()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Error saving receipt image: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun drawReceiptOnCanvas(
+    context: android.content.Context,
+    canvas: android.graphics.Canvas,
+    w: Int,
+    h: Int,
+    student: com.example.data.model.Student,
+    fee: com.example.data.model.FeeRecord,
+    isForImage: Boolean = false
+) {
+    // Fill background with clean white
+    val bgPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgPaint)
+
+    // Outer border
+    val borderPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#E2E8F0")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 10f
+    }
+    canvas.drawRect(5f, 5f, w.toFloat() - 5f, h.toFloat() - 5f, borderPaint)
+
+    // Inner thin border in brand colors
+    borderPaint.color = android.graphics.Color.parseColor("#1E3A8A")
+    borderPaint.strokeWidth = 2f
+    canvas.drawRect(15f, 15f, w.toFloat() - 15f, h.toFloat() - 15f, borderPaint)
+
+    // Try loading custom logo
+    var logoBitmap: android.graphics.Bitmap? = null
+    try {
+        val logoFile = java.io.File(context.filesDir, "custom_app_logo.png")
+        if (logoFile.exists()) {
+            logoBitmap = android.graphics.BitmapFactory.decodeFile(logoFile.absolutePath)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    val logoSize = if (isForImage) 100f else 60f
+    val logoX = 40f
+    val logoY = 40f
+
+    if (logoBitmap != null) {
+        val circularBitmap = getRoundedCroppedBitmap(logoBitmap)
+        val destRect = android.graphics.Rect(logoX.toInt(), logoY.toInt(), (logoX + logoSize).toInt(), (logoY + logoSize).toInt())
+        canvas.drawBitmap(circularBitmap, null, destRect, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+    } else {
+        // Fallback logo
+        val badgePaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.parseColor("#1E3A8A")
+            style = android.graphics.Paint.Style.FILL
+            isAntiAlias = true
+        }
+        canvas.drawCircle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2, badgePaint)
+        
+        val textPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = logoSize * 0.35f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+        canvas.drawText("TA", logoX + logoSize / 2, logoY + logoSize / 2 + (logoSize * 0.12f), textPaint)
+    }
+
+    // School Name & Subtitle
+    val schoolNamePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1E3A8A")
+        textSize = if (isForImage) 42f else 24f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+    val subtitlePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#4A5568")
+        textSize = if (isForImage) 20f else 12f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+        isAntiAlias = true
+    }
+
+    val textX = logoX + logoSize + (if (isForImage) 30f else 15f)
+    val textY = logoY + (if (isForImage) 45f else 25f)
+    canvas.drawText("TOPPERS ACADEMY", textX, textY, schoolNamePaint)
+    canvas.drawText("Affiliated Educational Portal | Fee Receipt", textX, textY + (if (isForImage) 35f else 18f), subtitlePaint)
+
+    // Divider
+    val dividerPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#E2E8F0")
+        strokeWidth = if (isForImage) 4f else 2f
+        style = android.graphics.Paint.Style.STROKE
+    }
+    val divY = logoY + logoSize + (if (isForImage) 30f else 15f)
+    canvas.drawLine(40f, divY, w - 40f, divY, dividerPaint)
+
+    // Receipt details
+    val infoLabelPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#718096")
+        textSize = if (isForImage) 22f else 12f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+    val infoValuePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1A202C")
+        textSize = if (isForImage) 24f else 13f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+
+    val receiptNoY = divY + (if (isForImage) 50f else 30f)
+    canvas.drawText("RECEIPT NO:", 40f, receiptNoY, infoLabelPaint)
+    canvas.drawText("REC-${fee.feeId.takeLast(6).uppercase(Locale.getDefault())}", 40f, receiptNoY + (if (isForImage) 30f else 18f), infoValuePaint)
+
+    // Paid stamp badge
+    val stampPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#D1FAE5")
+        style = android.graphics.Paint.Style.FILL
+        isAntiAlias = true
+    }
+    val stampTextPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#065F46")
+        textSize = if (isForImage) 20f else 11f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        textAlign = android.graphics.Paint.Align.CENTER
+        isAntiAlias = true
+    }
+
+    val stampWidth = if (isForImage) 220f else 130f
+    val stampHeight = if (isForImage) 60f else 32f
+    val stampRect = android.graphics.RectF(w - 40f - stampWidth, receiptNoY - (if (isForImage) 15f else 8f), w - 40f, receiptNoY + stampHeight - (if (isForImage) 15f else 8f))
+    canvas.drawRoundRect(stampRect, 8f, 8f, stampPaint)
+    
+    stampPaint.style = android.graphics.Paint.Style.STROKE
+    stampPaint.color = android.graphics.Color.parseColor("#10B981")
+    stampPaint.strokeWidth = 2f
+    canvas.drawRoundRect(stampRect, 8f, 8f, stampPaint)
+
+    canvas.drawText("PAID & VERIFIED", stampRect.centerX(), stampRect.centerY() + (if (isForImage) 7f else 4f), stampTextPaint)
+
+    // Student profile title
+    val sectionTitlePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1E3A8A")
+        textSize = if (isForImage) 26f else 14f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+
+    val studentDetailsY = receiptNoY + (if (isForImage) 110f else 60f)
+    canvas.drawText("STUDENT PROFILE DETAILS", 40f, studentDetailsY, sectionTitlePaint)
+
+    // Details box background
+    val cardBgPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#F7FAFC")
+        style = android.graphics.Paint.Style.FILL
+        isAntiAlias = true
+    }
+    val cardRect = android.graphics.RectF(40f, studentDetailsY + (if (isForImage) 20f else 10f), w - 40f, studentDetailsY + (if (isForImage) 320f else 170f))
+    canvas.drawRoundRect(cardRect, 16f, 16f, cardBgPaint)
+
+    val cardBorderPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#EDF2F7")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+    }
+    canvas.drawRoundRect(cardRect, 16f, 16f, cardBorderPaint)
+
+    // Inside table details
+    val labelPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#718096")
+        textSize = if (isForImage) 20f else 11f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL)
+        isAntiAlias = true
+    }
+    val valPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#2D3748")
+        textSize = if (isForImage) 20f else 11f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+
+    val startInsideY = cardRect.top + (if (isForImage) 45f else 25f)
+    val rowHeight = if (isForImage) 55f else 28f
+
+    val details = listOf(
+        "Student ID" to student.studentId,
+        "Student Name" to student.name,
+        "Class & Section" to "Class ${student.studentClass} (${student.section})",
+        "Roll Number" to student.rollNumber,
+        "Date of Birth" to student.dob.ifBlank { "N/A" }
+    )
+
+    details.forEachIndexed { idx, pair ->
+        val currentY = startInsideY + (idx * rowHeight)
+        canvas.drawText(pair.first, 60f, currentY, labelPaint)
+        
+        valPaint.textAlign = android.graphics.Paint.Align.RIGHT
+        canvas.drawText(pair.second, w - 60f, currentY, valPaint)
+        valPaint.textAlign = android.graphics.Paint.Align.LEFT
+    }
+
+    // Transaction box
+    val transDetailsY = cardRect.bottom + (if (isForImage) 60f else 35f)
+    canvas.drawText("TRANSACTION INFORMATION", 40f, transDetailsY, sectionTitlePaint)
+
+    val transCardRect = android.graphics.RectF(40f, transDetailsY + (if (isForImage) 20f else 10f), w - 40f, transDetailsY + (if (isForImage) 380f else 210f))
+    canvas.drawRoundRect(transCardRect, 16f, 16f, cardBgPaint)
+    canvas.drawRoundRect(transCardRect, 16f, 16f, cardBorderPaint)
+
+    val transDetails = listOf(
+        "Fee Category" to fee.title,
+        "Transaction ID" to fee.transactionId,
+        "Paid Date" to fee.paymentDate,
+        "UPI Destination" to fee.upiUsed
+    )
+
+    val startTransY = transCardRect.top + (if (isForImage) 45f else 25f)
+    transDetails.forEachIndexed { idx, pair ->
+        val currentY = startTransY + (idx * rowHeight)
+        canvas.drawText(pair.first, 60f, currentY, labelPaint)
+        
+        valPaint.textAlign = android.graphics.Paint.Align.RIGHT
+        canvas.drawText(pair.second, w - 60f, currentY, valPaint)
+        valPaint.textAlign = android.graphics.Paint.Align.LEFT
+    }
+
+    // Subdivider and total amount
+    val lineY = startTransY + (4 * rowHeight) - (if (isForImage) 15f else 8f)
+    canvas.drawLine(60f, lineY, w - 60f, lineY, dividerPaint)
+
+    val amtLabelPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1A202C")
+        textSize = if (isForImage) 24f else 13f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        isAntiAlias = true
+    }
+    val amtValPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1E3A8A")
+        textSize = if (isForImage) 32f else 18f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        textAlign = android.graphics.Paint.Align.RIGHT
+        isAntiAlias = true
+    }
+
+    val amtY = lineY + (if (isForImage) 45f else 25f)
+    canvas.drawText("Total Paid Amount", 60f, amtY, amtLabelPaint)
+    canvas.drawText("₹${fee.amount}", w - 60f, amtY, amtValPaint)
+
+    // Digital Seal details
+    val footerY = transCardRect.bottom + (if (isForImage) 70f else 40f)
+    val sealPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1E3A8A")
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    val sealRadius = if (isForImage) 45f else 24f
+    canvas.drawCircle((w / 2).toFloat(), footerY + sealRadius, sealRadius, sealPaint)
+
+    val sealTextPaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#1E3A8A")
+        textSize = if (isForImage) 14f else 8f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        textAlign = android.graphics.Paint.Align.CENTER
+        isAntiAlias = true
+    }
+    canvas.drawText("TOPPERS", (w / 2).toFloat(), footerY + sealRadius + (if (isForImage) 5f else 3f), sealTextPaint)
+
+    val footnotePaint = android.graphics.Paint().apply {
+        color = android.graphics.Color.parseColor("#718096")
+        textSize = if (isForImage) 18f else 9f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.ITALIC)
+        textAlign = android.graphics.Paint.Align.CENTER
+        isAntiAlias = true
+    }
+
+    val textOffsetY = footerY + (sealRadius * 2) + (if (isForImage) 30f else 15f)
+    canvas.drawText("Toppers Academy Digital Certified Seal", (w / 2).toFloat(), textOffsetY, footnotePaint)
+    canvas.drawText("This is a computer-generated official receipt.", (w / 2).toFloat(), textOffsetY + (if (isForImage) 25f else 12f), footnotePaint)
 }

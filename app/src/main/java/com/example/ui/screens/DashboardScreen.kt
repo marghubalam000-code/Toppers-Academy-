@@ -51,6 +51,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
+import android.content.Intent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,6 +64,10 @@ fun DashboardScreen(
     val students by viewModel.students.collectAsState()
     val allAttendance by viewModel.allAttendanceRecords.collectAsState()
     val selectedDate by viewModel.selectedDate.collectAsState()
+    val allChats by viewModel.allChatMessages.collectAsState()
+    val unreadChatCount = remember(allChats) {
+        allChats.count { it.sender == "Parent" && !it.isRead }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedStudentProfile by remember { mutableStateOf<Student?>(null) }
@@ -849,7 +854,8 @@ fun DashboardScreen(
                             label = "Messages",
                             backgroundColor = Color(0xFF123C32),
                             onClick = { showMessagesDialog = true },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            badgeCount = unreadChatCount
                         )
                         FeatureButton(
                             icon = Icons.Default.Remove,
@@ -1183,16 +1189,69 @@ fun StaffManagementDialog(
     onDismiss: () -> Unit
 ) {
     val staffList by viewModel.staffList.collectAsState()
+    val teachersList by viewModel.allTeachers.collectAsState()
+    val batchesList by viewModel.batchesList.collectAsState()
+    val context = LocalContext.current
+
+    var selectedTab by remember { mutableStateOf(0) } // 0: Support Staff, 1: Class Teachers
+
+    // State for Staff
     var name by remember { mutableStateOf("") }
     var role by remember { mutableStateOf("") }
-    val context = LocalContext.current
+
+    // State for Teacher
+    var teacherId by remember { mutableStateOf("") }
+    var teacherName by remember { mutableStateOf("") }
+    var teacherClass by remember { mutableStateOf("") }
+    var teacherSection by remember { mutableStateOf("A") }
+    var teacherMobile by remember { mutableStateOf("") }
+    var teacherEmail by remember { mutableStateOf("") }
+    var teacherPassword by remember { mutableStateOf("") }
+    var teacherSubject by remember { mutableStateOf("Mathematics") }
+    var customSubject by remember { mutableStateOf("") }
+
+    // Dropdown States
+    var classDropdownExpanded by remember { mutableStateOf(false) }
+    var subjectDropdownExpanded by remember { mutableStateOf(false) }
+
+    // Photo picker state
+    var pickedPhotoUri by remember { mutableStateOf<Uri?>(null) }
+    val photoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        pickedPhotoUri = uri
+    }
+
+    // List of standard subjects
+    val subjectsList = listOf("Mathematics", "Science", "English", "History", "Physics", "Chemistry", "Biology", "Computer Science", "Other")
+
+    // List of batches
+    val classesToChoose = remember(batchesList) {
+        if (batchesList.isNotEmpty()) batchesList else listOf("Class 10", "Class 9", "Class 8", "Class 7")
+    }
+
+    // Pre-populate automatic ID & password & default class on open
+    LaunchedEffect(Unit) {
+        if (teacherId.isEmpty()) {
+            teacherId = "T-${(101..999).random()}"
+        }
+        if (teacherPassword.isEmpty()) {
+            teacherPassword = (100000..999999).random().toString()
+        }
+    }
+
+    LaunchedEffect(classesToChoose) {
+        if (teacherClass.isEmpty() || (teacherClass == "Class 10" && !classesToChoose.contains("Class 10"))) {
+            teacherClass = classesToChoose.firstOrNull() ?: "Class 10"
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Default.Badge, contentDescription = null, tint = Color(0xFFF59E0B))
-                Text("Manage Academy Staff", fontWeight = FontWeight.Bold)
+                Text("Staff & Teacher Directory", fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
         },
         text = {
@@ -1202,93 +1261,469 @@ fun StaffManagementDialog(
                     .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Active Staff Members (${staffList.size})", fontSize = 12.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
-                
-                // Scrollable List of Staff
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 180.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .padding(4.dp)
-                ) {
-                    if (staffList.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No staff registered", fontSize = 12.sp, color = Color.Gray)
-                        }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(staffList) { staff ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column {
-                                        Text(staff.name, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                        Text(staff.role, fontSize = 11.sp, color = Color.Gray)
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            viewModel.deleteStaff(staff.name, staff.role)
-                                            Toast.makeText(context, "${staff.name} removed", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red, modifier = Modifier.size(18.dp))
-                                    }
-                                }
-                                Divider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                            }
-                        }
+                // Tab Selection
+                TabRow(selectedTabIndex = selectedTab, modifier = Modifier.fillMaxWidth()) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 }
+                    ) {
+                        Text(
+                            text = "Staff (${staffList.size})",
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 }
+                    ) {
+                        Text(
+                            text = "Teachers (${teachersList.size})",
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
-                Divider(color = MaterialTheme.colorScheme.surfaceVariant)
-
-                // Input Form
-                Text("Register New Staff", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    placeholder = { Text("Staff Full Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-
-                OutlinedTextField(
-                    value = role,
-                    onValueChange = { role = it },
-                    placeholder = { Text("Role (e.g. Physics Teacher, Clerk)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                )
-
-                Button(
-                    onClick = {
-                        val n = name.trim()
-                        val r = role.trim()
-                        if (n.isNotEmpty() && r.isNotEmpty()) {
-                            viewModel.addStaff(n, r)
-                            name = ""
-                            role = ""
-                            Toast.makeText(context, "Staff '$n' registered successfully", Toast.LENGTH_SHORT).show()
+                if (selectedTab == 0) {
+                    // Support Staff List & Registration
+                    Text("Active Staff Members", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                            .padding(4.dp)
+                    ) {
+                        if (staffList.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("No staff registered", fontSize = 12.sp, color = Color.Gray)
+                            }
                         } else {
-                            Toast.makeText(context, "All fields are required", Toast.LENGTH_SHORT).show()
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                items(staffList) { staff ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column {
+                                            Text(staff.name, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Text(staff.role, fontSize = 11.sp, color = Color.Gray)
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.deleteStaff(staff.name, staff.role)
+                                                Toast.makeText(context, "${staff.name} removed", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                    Divider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                }
+                            }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B), contentColor = Color.Black)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Register Staff", fontWeight = FontWeight.Bold)
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                    Text("Register New Staff", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = { Text("Staff Full Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = role,
+                        onValueChange = { role = it },
+                        placeholder = { Text("Role (e.g. Clerk, Guard, Peon)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            val n = name.trim()
+                            val r = role.trim()
+                            if (n.isNotEmpty() && r.isNotEmpty()) {
+                                viewModel.addStaff(n, r)
+                                name = ""
+                                role = ""
+                                Toast.makeText(context, "Staff '$n' registered", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "All fields are required", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B), contentColor = Color.Black)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Register Staff", fontWeight = FontWeight.Bold)
+                    }
+
+                } else {
+                    // Class Teachers List & Registration
+                    Text("Active Classroom Teachers", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 140.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                            .padding(4.dp)
+                    ) {
+                        if (teachersList.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("No class teachers registered", fontSize = 12.sp, color = Color.Gray)
+                            }
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                items(teachersList) { teacher ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        // Circular Photo or Placeholder
+                                        val photoUrl = if (teacher.photoPath.isNotEmpty()) Uri.parse(teacher.photoPath) else null
+                                        AsyncImage(
+                                            model = photoUrl ?: "https://images.unsplash.com/photo-1544717305-2782549b5136?w=150&auto=format&fit=crop",
+                                            contentDescription = "Teacher Photo",
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .border(1.5.dp, Color(0xFFF59E0B), CircleShape),
+                                            contentScale = ContentScale.Crop
+                                        )
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(teacher.name, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Text("ID: ${teacher.teacherId} | Class: ${teacher.assignedClass}-${teacher.assignedSection} | Subject: ${teacher.subject.ifBlank { "All" }}", fontSize = 11.sp, color = Color.Gray)
+                                            Text("Email: ${teacher.email} | PIN: ${teacher.password}", fontSize = 10.sp, color = Color.Gray)
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.deleteTeacher(teacher)
+                                                Toast.makeText(context, "Removed teacher: ${teacher.name}", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                    Divider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                }
+                            }
+                        }
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                    Text("Register Class Teacher", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    
+                    Column(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // 1. Teacher Photo Picker Profile Area
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .border(2.dp, Color(0xFFF59E0B), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (pickedPhotoUri != null) {
+                                    AsyncImage(
+                                        model = pickedPhotoUri,
+                                        contentDescription = "Selected Photo",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = "No Photo",
+                                        tint = Color.Gray,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Teacher Photo", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("Upload profile picture", fontSize = 11.sp, color = Color.Gray)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Button(
+                                    onClick = { photoLauncher.launch("image/*") },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        contentColor = Color(0xFFB45309)
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Choose Photo", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        // 2. Auto-Generated Credentials Preview
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = teacherId,
+                                onValueChange = { teacherId = it },
+                                label = { Text("Teacher ID (Auto)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                trailingIcon = {
+                                    IconButton(onClick = { teacherId = "T-${(101..999).random()}" }) {
+                                        Icon(Icons.Default.Refresh, contentDescription = "Regenerate ID", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            )
+
+                            OutlinedTextField(
+                                value = teacherPassword,
+                                onValueChange = { teacherPassword = it },
+                                label = { Text("PIN Password (Auto)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                trailingIcon = {
+                                    IconButton(onClick = { teacherPassword = (100000..999999).random().toString() }) {
+                                        Icon(Icons.Default.Refresh, contentDescription = "Regenerate PIN", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            )
+                        }
+
+                        // 3. Teacher Personal Info
+                        OutlinedTextField(
+                            value = teacherName,
+                            onValueChange = { teacherName = it },
+                            placeholder = { Text("Teacher Full Name") },
+                            label = { Text("Teacher Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+
+                        // 4. Class Selector (Choose Class Dropdown Option)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = teacherClass,
+                                onValueChange = {},
+                                label = { Text("Choose Class") },
+                                placeholder = { Text("Select Class") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Class") }
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable { classDropdownExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = classDropdownExpanded,
+                                onDismissRequest = { classDropdownExpanded = false }
+                            ) {
+                                classesToChoose.forEach { cls ->
+                                    DropdownMenuItem(
+                                        text = { Text(cls) },
+                                        onClick = {
+                                            teacherClass = cls
+                                            classDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // 5. Section Selector
+                        OutlinedTextField(
+                            value = teacherSection,
+                            onValueChange = { teacherSection = it },
+                            placeholder = { Text("e.g. A, B, C") },
+                            label = { Text("Assigned Section") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+
+                        // 6. Subject Selector (Choose Subject Dropdown Option)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = teacherSubject,
+                                onValueChange = {},
+                                label = { Text("Choose Subject") },
+                                placeholder = { Text("Select Subject") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Subject") }
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clickable { subjectDropdownExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = subjectDropdownExpanded,
+                                onDismissRequest = { subjectDropdownExpanded = false }
+                            ) {
+                                subjectsList.forEach { subj ->
+                                    DropdownMenuItem(
+                                        text = { Text(subj) },
+                                        onClick = {
+                                            teacherSubject = subj
+                                            subjectDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (teacherSubject == "Other") {
+                            OutlinedTextField(
+                                value = customSubject,
+                                onValueChange = { customSubject = it },
+                                placeholder = { Text("Enter Custom Subject Name") },
+                                label = { Text("Custom Subject") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        }
+
+                        // 7. Contact Details
+                        OutlinedTextField(
+                            value = teacherMobile,
+                            onValueChange = { teacherMobile = it },
+                            placeholder = { Text("Mobile Number (Optional)") },
+                            label = { Text("Mobile Number") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+
+                        OutlinedTextField(
+                            value = teacherEmail,
+                            onValueChange = { teacherEmail = it },
+                            placeholder = { Text("Email (For PIN Credentials Delivery)") },
+                            label = { Text("Teacher Email") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+
+                        Button(
+                            onClick = {
+                                val tid = teacherId.trim()
+                                val tname = teacherName.trim()
+                                val tcls = teacherClass.trim()
+                                val tsec = teacherSection.trim()
+                                val tmob = teacherMobile.trim()
+                                val temail = teacherEmail.trim()
+                                val tpass = teacherPassword.trim()
+                                val tsubj = if (teacherSubject == "Other") customSubject.trim() else teacherSubject
+                                val tphoto = pickedPhotoUri?.toString() ?: ""
+
+                                if (tid.isNotEmpty() && tname.isNotEmpty() && tcls.isNotEmpty() && tsec.isNotEmpty() && temail.isNotEmpty() && tpass.isNotEmpty()) {
+                                    viewModel.addTeacher(tid, tname, tcls, tsec, tmob, temail, tpass, tsubj, tphoto)
+
+                                    // Launch email client intent prefilled
+                                    val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                        data = Uri.parse("mailto:")
+                                        putExtra(Intent.EXTRA_EMAIL, arrayOf(temail))
+                                        putExtra(Intent.EXTRA_SUBJECT, "Toppers Academy - Teacher Portal Credentials")
+                                        val body = """
+                                            Dear $tname,
+
+                                            Welcome to Toppers Academy! Your digital teacher portal account has been created.
+                                            Please find your portal access credentials below:
+
+                                            Teacher ID: $tid
+                                            Security PIN/Password: $tpass
+                                            Assigned Class: $tcls - $tsec
+                                            Assigned Subject: $tsubj
+
+                                            Please log in using the Teacher Portal in our application.
+
+                                            Best Regards,
+                                            School Administration
+                                            Toppers Academy
+                                        """.trimIndent()
+                                        putExtra(Intent.EXTRA_TEXT, body)
+                                    }
+                                    try {
+                                        context.startActivity(Intent.createChooser(intent, "Send Portal PIN to Teacher"))
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "No email app found. Credentials copied to clipboard!", Toast.LENGTH_LONG).show()
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        val clip = android.content.ClipData.newPlainText("Teacher Credentials", "ID: $tid, PIN: $tpass")
+                                        clipboard.setPrimaryClip(clip)
+                                    }
+
+                                    // Generate new credentials for next input
+                                    teacherId = "T-${(101..999).random()}"
+                                    teacherPassword = (100000..999999).random().toString()
+                                    teacherName = ""
+                                    teacherMobile = ""
+                                    teacherEmail = ""
+                                    pickedPhotoUri = null
+                                    customSubject = ""
+
+                                    Toast.makeText(context, "Teacher registered successfully! Launching email composer...", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "All fields (except mobile) are required", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B), contentColor = Color.Black)
+                        ) {
+                            Icon(Icons.Default.Email, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Register & Send Email", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         },
@@ -1688,9 +2123,26 @@ fun CommunityMessagesDialog(
     onDismiss: () -> Unit
 ) {
     val communityMessages by viewModel.communityMessages.collectAsState()
+    val allChats by viewModel.allChatMessages.collectAsState()
+    val students by viewModel.students.collectAsState()
+    
+    var activeTab by remember { mutableStateOf(0) } // 0 = Community, 1 = Parent Chats
+    var selectedStudent by remember { mutableStateOf<Student?>(null) }
+    var chatInputText by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
+    
     val context = LocalContext.current
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    val unreadChatCount = remember(allChats) {
+        allChats.count { it.sender == "Parent" && !it.isRead }
+    }
+
+    LaunchedEffect(selectedStudent, allChats) {
+        selectedStudent?.let {
+            viewModel.markMessagesAsRead(it.studentId, "Parent")
+        }
+    }
 
     // Automatically scroll to the end when a new message is appended
     LaunchedEffect(communityMessages.size) {
@@ -1702,9 +2154,20 @@ fun CommunityMessagesDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.Chat, contentDescription = null, tint = Color(0xFFF59E0B))
-                Text("Community Space", fontWeight = FontWeight.Bold)
+            Row(
+                verticalAlignment = Alignment.CenterVertically, 
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Chat, contentDescription = null, tint = Color(0xFFF59E0B))
+                    Text(if (activeTab == 0) "Community Space" else if (selectedStudent == null) "Parent Secure Threads" else "Chat: ${selectedStudent?.name}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+                if (activeTab == 1 && selectedStudent != null) {
+                    TextButton(onClick = { selectedStudent = null }) {
+                        Text("Back", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
             }
         },
         text = {
@@ -1714,77 +2177,303 @@ fun CommunityMessagesDialog(
                     .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Toppers Academy Community Chat", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
-                
-                // Message List
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .height(240.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .padding(6.dp)
+                TabRow(
+                    selectedTabIndex = activeTab,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    LazyColumn(
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    Tab(
+                        selected = activeTab == 0,
+                        onClick = { activeTab = 0 },
+                        text = { Text("Community", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                    )
+                    Tab(
+                        selected = activeTab == 1,
+                        onClick = { activeTab = 1 },
+                        text = { 
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Parent Secure", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                if (unreadChatCount > 0) {
+                                    Badge(containerColor = MaterialTheme.colorScheme.error) {
+                                        Text("$unreadChatCount", color = Color.White, fontSize = 9.sp)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+
+                if (activeTab == 0) {
+                    Text("Toppers Academy Community Chat", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                    
+                    // Message List
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                            .height(240.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                            .padding(6.dp)
                     ) {
-                        items(communityMessages) { msg ->
-                            val isMe = msg.sender == "Admin" || msg.sender == "Principal"
-                            val bubbleColor = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-                            val align = if (isMe) Alignment.End else Alignment.Start
-                            
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = align
-                            ) {
+                        LazyColumn(
+                            state = listState,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(communityMessages) { msg ->
+                                val isMe = msg.sender == "Admin" || msg.sender == "Principal"
+                                val bubbleColor = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                                val align = if (isMe) Alignment.End else Alignment.Start
+                                
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(msg.sender, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    Text("(${msg.role})", fontSize = 8.sp, color = Color.Gray)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(bubbleColor)
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Text(msg.message, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                                    if (isMe) {
+                                        IconButton(
+                                            onClick = { viewModel.deleteCommunityMessage(msg) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete Message",
+                                                tint = Color.Red.copy(alpha = 0.8f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
+
+                                    Column(
+                                        horizontalAlignment = align
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(msg.sender, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("(${msg.role})", fontSize = 8.sp, color = Color.Gray)
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(bubbleColor)
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(msg.message, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                    }
+
+                                    if (!isMe) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        IconButton(
+                                            onClick = { viewModel.deleteCommunityMessage(msg) },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete Message",
+                                                tint = Color.Red.copy(alpha = 0.8f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // Input Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = message,
-                        onValueChange = { message = it },
-                        placeholder = { Text("Type community message...", fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    IconButton(
-                        onClick = {
-                            val text = message.trim()
-                            if (text.isNotEmpty()) {
-                                viewModel.sendCommunityMessage("Admin", "Staff", text)
-                                message = ""
-                            }
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFFF59E0B), contentColor = Color.Black),
-                        modifier = Modifier.size(44.dp)
+                    // Input Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+                        OutlinedTextField(
+                            value = message,
+                            onValueChange = { message = it },
+                            placeholder = { Text("Type community message...", fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+
+                        IconButton(
+                            onClick = {
+                                val text = message.trim()
+                                if (text.isNotEmpty()) {
+                                    viewModel.sendCommunityMessage("Admin", "Staff", text)
+                                    message = ""
+                                }
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color(0xFFF59E0B), contentColor = Color.Black),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                } else {
+                    // Parent Secure Chats Tab
+                    if (selectedStudent == null) {
+                        // Show all active students and their unread counts
+                        val activeStudents = students.filter { it.status == "Active" }
+                        if (activeStudents.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
+                                Text("No students available.", fontSize = 12.sp, color = Color.Gray)
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(240.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(activeStudents) { student ->
+                                    val threadChats = allChats.filter { it.studentId == student.studentId }
+                                    val lastMessage = threadChats.lastOrNull()?.message ?: "No messages yet."
+                                    val threadUnread = threadChats.count { it.sender == "Parent" && !it.isRead }
+                                    
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { selectedStudent = student },
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(student.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                Text("Class ${student.studentClass} ${student.section}", fontSize = 10.sp, color = Color.Gray)
+                                                Text(lastMessage, fontSize = 10.sp, color = Color.Gray, maxLines = 1)
+                                            }
+                                            if (threadUnread > 0) {
+                                                Badge(containerColor = MaterialTheme.colorScheme.error) {
+                                                    Text("$threadUnread New", fontSize = 8.sp, color = Color.White, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Active Chat Window
+                        val student = selectedStudent!!
+                        val threadChats = remember(allChats, student.studentId) {
+                            allChats.filter { it.studentId == student.studentId }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(200.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .padding(6.dp)
+                        ) {
+                            if (threadChats.isEmpty()) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("No messages in this secure channel.", fontSize = 11.sp, color = Color.Gray)
+                                }
+                            } else {
+                                LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(threadChats) { chat ->
+                                        val isMe = chat.sender == "Teacher" || chat.sender == "Admin"
+                                        val align = if (isMe) Alignment.End else Alignment.Start
+                                        val bubbleColor = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                                        
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (isMe) {
+                                                IconButton(
+                                                    onClick = { viewModel.deleteChatMessage(chat) },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete Message",
+                                                        tint = Color.Red.copy(alpha = 0.8f),
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                            }
+
+                                            Column(
+                                                horizontalAlignment = align
+                                            ) {
+                                                Text(if (isMe) chat.senderName else "Parent", fontSize = 9.sp, color = Color.Gray)
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(bubbleColor)
+                                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                                ) {
+                                                    Text(chat.message, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                                                }
+                                            }
+
+                                            if (!isMe) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                IconButton(
+                                                    onClick = { viewModel.deleteChatMessage(chat) },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete Message",
+                                                        tint = Color.Red.copy(alpha = 0.8f),
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Send secure message input
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = chatInputText,
+                                onValueChange = { chatInputText = it },
+                                placeholder = { Text("Type secure parent message...", fontSize = 12.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    if (chatInputText.trim().isNotEmpty()) {
+                                        viewModel.sendChatMessage(
+                                            studentId = student.studentId,
+                                            studentName = student.name,
+                                            sender = "Admin",
+                                            senderName = "Admin/Principal",
+                                            msgText = chatInputText.trim()
+                                        )
+                                        chatInputText = ""
+                                    }
+                                },
+                                colors = IconButtonDefaults.iconButtonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = "Send", modifier = Modifier.size(18.dp), tint = Color.White)
+                            }
+                        }
                     }
                 }
             }
@@ -1916,13 +2605,15 @@ fun MarkingAttendanceCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FeatureButton(
     icon: ImageVector,
     label: String,
     backgroundColor: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    badgeCount: Int = 0
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -1962,12 +2653,32 @@ fun FeatureButton(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = Color.White,
-                modifier = Modifier.size(26.dp)
-            )
+            if (badgeCount > 0) {
+                BadgedBox(
+                    badge = {
+                        Badge(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ) {
+                            Text(badgeCount.toString(), fontSize = 9.sp)
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
         }
         Text(
             text = label,
@@ -2018,6 +2729,10 @@ fun StudentProfileDialog(
 
     var studentFees by remember(student.studentId) { mutableStateOf(viewModel.getStudentFees(student.studentId)) }
     var showFeeManager by remember { mutableStateOf(false) }
+    var showIDCard by remember { mutableStateOf(false) }
+    var showShareAttendanceDialog by remember { mutableStateOf(false) }
+    val appLogoUri by viewModel.appLogoUri.collectAsState()
+    val principalSignatureUri by viewModel.principalSignatureUri.collectAsState()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2130,6 +2845,18 @@ fun StudentProfileDialog(
                     }
                 }
 
+                Button(
+                    onClick = { showShareAttendanceDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp, horizontal = 12.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Share Date-wise Attendance / उपस्थिति साझा करें", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     ProfileField(label = "Father's Name", value = student.fatherName)
                     ProfileField(label = "Mother's Name", value = student.motherName)
@@ -2144,11 +2871,42 @@ fun StudentProfileDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
-                Text("Close Profile")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = { showIDCard = true },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Badge,
+                        contentDescription = "Badge Icon",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("View ID Card", fontSize = 12.sp)
+                }
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Close Profile", fontSize = 12.sp)
+                }
             }
         }
     )
+
+    if (showIDCard) {
+        StudentIDCardDialog(
+            student = student,
+            appLogoUri = appLogoUri,
+            principalSignatureUri = principalSignatureUri,
+            onDismiss = { showIDCard = false }
+        )
+    }
 
     if (showFeeManager) {
         StudentFeeManagerDialog(
@@ -2157,6 +2915,23 @@ fun StudentProfileDialog(
             onDismiss = { showFeeManager = false },
             onFeesChanged = {
                 studentFees = viewModel.getStudentFees(student.studentId)
+            }
+        )
+    }
+
+    if (showShareAttendanceDialog) {
+        val context = LocalContext.current
+        ShareCustomAttendanceDialog(
+            student = student,
+            allAttendance = allAttendance,
+            onDismiss = { showShareAttendanceDialog = false },
+            shareExportIntent = { content, formatName ->
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Toppers Academy $formatName Export")
+                    putExtra(Intent.EXTRA_TEXT, content)
+                }
+                context.startActivity(Intent.createChooser(intent, "Export via"))
             }
         )
     }
@@ -2350,12 +3125,40 @@ fun StudentFeeManagerDialog(
 
 @Composable
 fun ProfileField(label: String, value: String) {
+    val isPhone = label.contains("Mobile", ignoreCase = true) || label.contains("Phone", ignoreCase = true) || label.contains("Contact", ignoreCase = true)
+    val context = LocalContext.current
+    val clickableModifier = if (isPhone && value.trim().isNotEmpty()) {
+        Modifier.clickable {
+            try {
+                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${value.trim()}"))
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not open dialer", Toast.LENGTH_SHORT).show()
+            }
+        }
+    } else {
+        Modifier
+    }
+
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier.fillMaxWidth().then(clickableModifier),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = "$label:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
-        Text(text = value, fontSize = 12.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.End, modifier = Modifier.padding(start = 8.dp))
+        Text(
+            text = "$label:",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isPhone) MaterialTheme.colorScheme.primary else Color.Gray
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = if (isPhone) FontWeight.Bold else FontWeight.Medium,
+            color = if (isPhone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 8.dp)
+        )
     }
 }
 

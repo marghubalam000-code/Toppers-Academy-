@@ -148,300 +148,340 @@ fun AttendanceScreen(
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // 1. Selector Panel (Class & Section & Date)
-            Card(
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // First Row: Class Selector and Section Selector side by side
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                // 1. Selector Panel (Class & Section & Date)
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                     ) {
-                        // Class Dropdown Selector
-                        var classExpanded by remember { mutableStateOf(false) }
-                        Box(
+                        Column(
                             modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                .clickable { classExpanded = true }
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.CenterStart
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            // First Row: Class Selector and Section Selector side by side
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Class Dropdown Selector
+                                var classExpanded by remember { mutableStateOf(false) }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(40.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                        .clickable { classExpanded = true }
+                                        .padding(horizontal = 12.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(text = "Class: $selectedClass", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    
+                                    DropdownMenu(
+                                        expanded = classExpanded,
+                                        onDismissRequest = { classExpanded = false }
+                                    ) {
+                                        classes.forEach { cls ->
+                                            DropdownMenuItem(
+                                                text = { Text(cls, fontSize = 13.sp) },
+                                                onClick = {
+                                                    viewModel.setClassAndSection(cls, selectedSection)
+                                                    classExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Section Dropdown Selector
+                                var sectionExpanded by remember { mutableStateOf(false) }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(40.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                        .clickable { sectionExpanded = true }
+                                        .padding(horizontal = 12.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.GridOn, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(text = "Sec: $selectedSection", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    
+                                    DropdownMenu(
+                                        expanded = sectionExpanded,
+                                        onDismissRequest = { sectionExpanded = false }
+                                    ) {
+                                        sections.forEach { sec ->
+                                            DropdownMenuItem(
+                                                text = { Text("Section $sec", fontSize = 13.sp) },
+                                                onClick = {
+                                                    viewModel.setClassAndSection(selectedClass, sec)
+                                                    sectionExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Second Row: Date picker in compact style
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(text = "Class: $selectedClass", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                IconButton(
+                                    onClick = { viewModel.changeDateByDays(-1) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Prev Day", modifier = Modifier.size(18.dp))
                                 }
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            
-                            DropdownMenu(
-                                expanded = classExpanded,
-                                onDismissRequest = { classExpanded = false }
-                            ) {
-                                classes.forEach { cls ->
-                                    DropdownMenuItem(
-                                        text = { Text(cls, fontSize = 13.sp) },
-                                        onClick = {
-                                            viewModel.setClassAndSection(cls, selectedSection)
-                                            classExpanded = false
-                                        }
+
+                                val currentDateStr by viewModel.selectedDate.collectAsState()
+                                val datePickerDialog = remember(currentDateStr) {
+                                    val dateParts = currentDateStr.split("-")
+                                    val year = dateParts.getOrNull(0)?.toIntOrNull() ?: java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+                                    val month = (dateParts.getOrNull(1)?.toIntOrNull() ?: (java.util.Calendar.getInstance().get(java.util.Calendar.MONTH) + 1)) - 1
+                                    val day = dateParts.getOrNull(2)?.toIntOrNull() ?: java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH)
+
+                                    android.app.DatePickerDialog(
+                                        context,
+                                        { _, selectedYear, selectedMonth, selectedDayOfMonth ->
+                                            val formattedMonth = String.format("%02d", selectedMonth + 1)
+                                            val formattedDay = String.format("%02d", selectedDayOfMonth)
+                                            viewModel.setDate("$selectedYear-$formattedMonth-$formattedDay")
+                                        },
+                                        year,
+                                        month,
+                                        day
+                                    ).apply {
+                                        datePicker.maxDate = System.currentTimeMillis()
+                                    }
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f))
+                                        .clickable { datePickerDialog.show() }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CalendarMonth,
+                                        contentDescription = "Pick Date",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = dateDisplay,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = "Tap to pick historical date",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.changeDateByDays(1) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next Day", modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
+                    }
+                }
 
-                        // Section Dropdown Selector
-                        var sectionExpanded by remember { mutableStateOf(false) }
-                        Box(
+                // 2. Multi-Action Overrides (Mark All Present/Absent)
+                if (filteredStudents.isNotEmpty()) {
+                    item {
+                        Column(
                             modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                .clickable { sectionExpanded = true }
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.CenterStart
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.GridOn, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(text = "Sec: $selectedSection", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                Button(
+                                    onClick = { viewModel.markAllAs("Present") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .bounceClick(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE6F4EA), contentColor = Color(0xFF137333)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("All Present", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                                Button(
+                                    onClick = { viewModel.markAllAs("Absent") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .bounceClick(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFCE8E6), contentColor = Color(0xFFC5221F)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.RemoveCircleOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("All Absent", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
-                            
-                            DropdownMenu(
-                                expanded = sectionExpanded,
-                                onDismissRequest = { sectionExpanded = false }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                sections.forEach { sec ->
-                                    DropdownMenuItem(
-                                        text = { Text("Section $sec", fontSize = 13.sp) },
-                                        onClick = {
-                                            viewModel.setClassAndSection(selectedClass, sec)
-                                            sectionExpanded = false
-                                        }
-                                    )
+                                Button(
+                                    onClick = { viewModel.markAllAs("Holiday") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .bounceClick(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE8F0FE), contentColor = Color(0xFF1A73E8)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.BeachAccess, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Mark Holiday", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = { viewModel.markAllAs("Cleared") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .bounceClick(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3F4F6), contentColor = Color(0xFF374151)),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Clear All", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
                     }
+                }
 
-                    // Second Row: Date picker in compact style
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = { viewModel.changeDateByDays(-1) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Prev Day", modifier = Modifier.size(18.dp))
-                        }
-
-                        val currentDateStr by viewModel.selectedDate.collectAsState()
-                        val datePickerDialog = remember(currentDateStr) {
-                            val dateParts = currentDateStr.split("-")
-                            val year = dateParts.getOrNull(0)?.toIntOrNull() ?: java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-                            val month = (dateParts.getOrNull(1)?.toIntOrNull() ?: (java.util.Calendar.getInstance().get(java.util.Calendar.MONTH) + 1)) - 1
-                            val day = dateParts.getOrNull(2)?.toIntOrNull() ?: java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH)
-
-                            android.app.DatePickerDialog(
-                                context,
-                                { _, selectedYear, selectedMonth, selectedDayOfMonth ->
-                                    val formattedMonth = String.format("%02d", selectedMonth + 1)
-                                    val formattedDay = String.format("%02d", selectedDayOfMonth)
-                                    viewModel.setDate("$selectedYear-$formattedMonth-$formattedDay")
-                                },
-                                year,
-                                month,
-                                day
-                            ).apply {
-                                datePicker.maxDate = System.currentTimeMillis()
-                            }
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                // 3. Students Attendance List / Empty State
+                if (filteredStudents.isEmpty()) {
+                    item {
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f))
-                                .clickable { datePickerDialog.show() }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .fillMaxWidth()
+                                .padding(vertical = 48.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.CalendarMonth,
-                                contentDescription = "Pick Date",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = dateDisplay,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.primary
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GroupOff,
+                                    contentDescription = "No Students",
+                                    tint = Color.LightGray,
+                                    modifier = Modifier.size(64.dp)
                                 )
+                                Spacer(modifier = Modifier.height(16.dp))
                                 Text(
-                                    text = "Tap to pick historical date",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                    text = "No Students Found",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "There are no active enrolled students registered in $selectedClass - Section $selectedSection. Go to Students screen to enroll students first.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray,
+                                    textAlign = TextAlign.Center
                                 )
                             }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.ArrowDropDown,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { viewModel.changeDateByDays(1) },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next Day", modifier = Modifier.size(18.dp))
                         }
                     }
-                }
-            }
-
-            // 2. Multi-Action Overrides (Mark All Present/Absent)
-            if (filteredStudents.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.markAllAs("Present") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(38.dp)
-                            .bounceClick(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE6F4EA), contentColor = Color(0xFF137333)),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("All Present", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = { viewModel.markAllAs("Absent") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(38.dp)
-                            .bounceClick(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFCE8E6), contentColor = Color(0xFFC5221F)),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.RemoveCircleOutline, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("All Absent", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = { viewModel.markAllAs("Holiday") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(38.dp)
-                            .bounceClick(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE8F0FE), contentColor = Color(0xFF1A73E8)),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 4.dp)
-                    ) {
-                        Icon(Icons.Default.BeachAccess, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Mark Holiday", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            // 3. Students Attendance List
-            if (filteredStudents.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.GroupOff,
-                            contentDescription = "No Students",
-                            tint = Color.LightGray,
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No Students Found",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "There are no active enrolled students registered in $selectedClass - Section $selectedSection. Go to Students screen to enroll students first.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                } else {
                     itemsIndexed(filteredStudents) { index, student ->
-                        val currentStatus = attendanceSheet[student.studentId] ?: "Present"
-                        AttendanceSelectorCard(
-                            student = student,
-                            serialNumber = index + 1,
-                            status = currentStatus,
-                            onStatusChange = { newStatus ->
-                                viewModel.setStudentStatus(student.studentId, newStatus)
-                            }
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            val currentStatus = attendanceSheet[student.studentId] ?: "Present"
+                            AttendanceSelectorCard(
+                                student = student,
+                                serialNumber = index + 1,
+                                status = currentStatus,
+                                onStatusChange = { newStatus ->
+                                    viewModel.setStudentStatus(student.studentId, newStatus)
+                                }
+                            )
+                        }
+                    }
+                    
+                    item {
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
             }
@@ -533,6 +573,7 @@ fun AttendanceSelectorCard(
                                 "Present" -> Color(0xFFD1FAE5)
                                 "Absent" -> Color(0xFFFEE2E2)
                                 "Leave" -> Color(0xFFFEF3C7)
+                                "Cleared" -> Color(0xFFF3F4F6)
                                 else -> Color(0xFFDBEAFE)
                             }
                         )
@@ -546,24 +587,26 @@ fun AttendanceSelectorCard(
                             "Present" -> Color(0xFF065F46)
                             "Absent" -> Color(0xFF991B1B)
                             "Leave" -> Color(0xFF92400E)
+                            "Cleared" -> Color(0xFF374151)
                             else -> Color(0xFF1E40AF)
                         }
                     )
                 }
             }
 
-            // Custom Segmented Button Selector for Present, Absent, Leave, Holiday
+            // Custom Segmented Button Selector for Present, Absent, Leave, Holiday, Clear
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                val statuses = listOf("Present", "Absent", "Leave", "Holiday")
+                val statuses = listOf("Present", "Absent", "Leave", "Holiday", "Cleared")
                 statuses.forEach { item ->
                     val isSelected = status == item
                     val activeColor = when (item) {
                         "Present" -> Color(0xFF10B981)
                         "Absent" -> Color(0xFFEF4444)
                         "Leave" -> Color(0xFFF59E0B)
+                        "Cleared" -> Color(0xFF6B7280)
                         else -> Color(0xFF3B82F6)
                     }
 
@@ -581,7 +624,7 @@ fun AttendanceSelectorCard(
                         shape = RoundedCornerShape(6.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
-                        Text(item, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(if (item == "Cleared") "Clear" else item, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }

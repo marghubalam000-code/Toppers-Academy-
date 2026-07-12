@@ -8,6 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.AppDatabase
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.Student
+import com.example.data.model.Teacher
+import com.example.data.model.ExamMark
+import com.example.data.model.ChatMessage
+import com.example.data.model.SmsLog
 import com.example.data.remote.FirestoreSyncManager
 import com.example.data.remote.SupabaseSyncManager
 import com.example.data.repository.AttendanceRepository
@@ -38,7 +42,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val db = AppDatabase.getDatabase(application)
     private val syncManager = FirestoreSyncManager(application)
     private val supabaseSyncManager = SupabaseSyncManager(application)
-    private val repository = AttendanceRepository(db.studentDao(), db.attendanceDao(), db.feeDao(), syncManager, supabaseSyncManager)
+    private val repository = AttendanceRepository(
+        db.studentDao(),
+        db.attendanceDao(),
+        db.feeDao(),
+        db.teacherDao(),
+        db.examMarkDao(),
+        db.chatMessageDao(),
+        db.smsLogDao(),
+        syncManager,
+        supabaseSyncManager
+    )
     private val notificationHelper = NotificationHelper(application)
     private val sharedPrefs = application.getSharedPreferences("toppers_admin_prefs", Context.MODE_PRIVATE)
 
@@ -173,6 +187,109 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    // Principal Signature State (stores dynamic custom signature URL or local Uri string)
+    private val _principalSignatureUri = MutableStateFlow(sharedPrefs.getString("principal_signature_uri", "") ?: "")
+    val principalSignatureUri: StateFlow<String> = _principalSignatureUri.asStateFlow()
+
+    fun setPrincipalSignatureUri(uri: String) {
+        val finalUriStr = if (uri.startsWith("content://")) {
+            try {
+                val context = getApplication<Application>()
+                val sourceUri = Uri.parse(uri)
+                context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+                    val file = java.io.File(context.filesDir, "custom_principal_signature.png")
+                    file.outputStream().use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                    Uri.fromFile(file).toString()
+                } ?: uri
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Failed to copy signature to internal storage", e)
+                uri
+            }
+        } else {
+            uri
+        }
+        _principalSignatureUri.value = finalUriStr
+        sharedPrefs.edit().putString("principal_signature_uri", finalUriStr).apply()
+
+        // Sync uploaded principal signature URL to Firestore settings collection so everyone automatically receives it
+        viewModelScope.launch {
+            try {
+                syncManager.updatePrincipalSignatureRemote(finalUriStr)
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Error syncing signature to Firestore settings: ${e.message}")
+            }
+        }
+    }
+
+    fun resetPrincipalSignatureUri() {
+        _principalSignatureUri.value = ""
+        sharedPrefs.edit().putString("principal_signature_uri", "").apply()
+
+        // Sync deletion to Firestore
+        viewModelScope.launch {
+            try {
+                syncManager.updatePrincipalSignatureRemote("")
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Error resetting signature in Firestore settings: ${e.message}")
+            }
+        }
+        try {
+            val file = java.io.File(getApplication<Application>().filesDir, "custom_principal_signature.png")
+            if (file.exists()) {
+                file.delete()
+            }
+        } catch (e: Exception) {
+            Log.e("AttendanceViewModel", "Failed to delete custom principal signature file", e)
+        }
+    }
+
+    private fun listenToPrincipalSignatureFromFirestore() {
+        syncManager.listenToPrincipalSignature { remoteUrl ->
+            if (remoteUrl.isNotEmpty() && remoteUrl != _principalSignatureUri.value) {
+                if (remoteUrl.startsWith("http")) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        try {
+                            val context = getApplication<Application>()
+                            val url = java.net.URL(remoteUrl)
+                            val connection = url.openConnection() as java.net.HttpURLConnection
+                            connection.doInput = true
+                            connection.connect()
+                            connection.inputStream.use { inputStream ->
+                                val file = java.io.File(context.filesDir, "custom_principal_signature.png")
+                                file.outputStream().use { outputStream ->
+                                    inputStream.copyTo(outputStream)
+                                }
+                                val localUriStr = Uri.fromFile(file).toString()
+                                withContext(Dispatchers.Main) {
+                                    _principalSignatureUri.value = localUriStr
+                                    sharedPrefs.edit().putString("principal_signature_uri", localUriStr).apply()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AttendanceViewModel", "Failed to download remote signature: ${e.message}")
+                            withContext(Dispatchers.Main) {
+                                _principalSignatureUri.value = remoteUrl
+                                sharedPrefs.edit().putString("principal_signature_uri", remoteUrl).apply()
+                            }
+                        }
+                    }
+                } else {
+                    _principalSignatureUri.value = remoteUrl
+                    sharedPrefs.edit().putString("principal_signature_uri", remoteUrl).apply()
+                }
+            } else if (remoteUrl.isEmpty() && _principalSignatureUri.value.isNotEmpty()) {
+                _principalSignatureUri.value = ""
+                sharedPrefs.edit().putString("principal_signature_uri", "").apply()
+                try {
+                    val file = java.io.File(getApplication<Application>().filesDir, "custom_principal_signature.png")
+                    if (file.exists()) file.delete()
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
     private fun listenToAppLogoFromFirestore() {
         syncManager.listenToAppLogo { remoteUrl ->
             if (remoteUrl.isNotEmpty() && remoteUrl != _appLogoUri.value) {
@@ -238,6 +355,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private var studentFeesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var allStudentsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var allAttendanceListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var studentDetailsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var allExamMarksListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var studentExamMarksListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var allChatsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var studentChatsListener: com.google.firebase.firestore.ListenerRegistration? = null
 
     private fun listenToPaymentConfigFromFirestore() {
         paymentConfigListener?.remove()
@@ -267,10 +389,29 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    private var isInitialFeesLoad = true
+    private var isInitialStudentFeesLoad = true
+
     private fun listenToAllFeesFromFirestore() {
         allFeesListener?.remove()
         allFeesListener = syncManager.listenToAllFeeRecords { list ->
             viewModelScope.launch {
+                if (!isInitialFeesLoad) {
+                    for (remoteFee in list) {
+                        if (remoteFee.status == "Pending") {
+                            val localFee = repository.getFeeById(remoteFee.feeId)
+                            if (localFee == null || localFee.status != "Pending") {
+                                notificationHelper.sendAdminPaymentNotification(
+                                    studentName = remoteFee.studentName,
+                                    amount = remoteFee.amount,
+                                    title = remoteFee.title
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    isInitialFeesLoad = false
+                }
                 repository.insertFeesLocal(list)
             }
         }
@@ -280,6 +421,26 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         studentFeesListener?.remove()
         studentFeesListener = syncManager.listenToStudentFeeRecords(studentId) { list ->
             viewModelScope.launch {
+                if (!isInitialStudentFeesLoad) {
+                    for (remoteFee in list) {
+                        val localFee = repository.getFeeById(remoteFee.feeId)
+                        if (localFee == null) {
+                            notificationHelper.sendStudentFeeIssuedNotification(
+                                title = remoteFee.title,
+                                amount = remoteFee.amount,
+                                dueDate = remoteFee.dueDate
+                            )
+                        } else if (localFee.status != remoteFee.status) {
+                            notificationHelper.sendStudentFeeStatusNotification(
+                                title = remoteFee.title,
+                                status = remoteFee.status,
+                                rejectionReason = remoteFee.rejectionReason
+                            )
+                        }
+                    }
+                } else {
+                    isInitialStudentFeesLoad = false
+                }
                 repository.insertFeesLocal(list)
             }
         }
@@ -299,6 +460,55 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         allAttendanceListener = syncManager.listenToAllAttendance { list ->
             viewModelScope.launch {
                 repository.insertAttendanceRecordsLocal(list)
+            }
+        }
+    }
+
+    private fun listenToStudentDetailsFromFirestore(studentId: String) {
+        studentDetailsListener?.remove()
+        studentDetailsListener = syncManager.listenToStudentDetails(studentId) { updatedStudent ->
+            viewModelScope.launch {
+                repository.updateStudent(updatedStudent)
+                if (_currentStudent.value?.studentId == updatedStudent.studentId) {
+                    _currentStudent.value = updatedStudent
+                    saveLoggedInStudent(updatedStudent)
+                }
+            }
+        }
+    }
+
+    private fun listenToStudentExamMarksFromFirestore(studentId: String) {
+        studentExamMarksListener?.remove()
+        studentExamMarksListener = syncManager.listenToStudentExamMarks(studentId) { marks ->
+            viewModelScope.launch {
+                repository.insertExamMarksLocal(marks)
+            }
+        }
+    }
+
+    private fun listenToStudentChatMessagesFromFirestore(studentId: String) {
+        studentChatsListener?.remove()
+        studentChatsListener = syncManager.listenToStudentChatMessages(studentId) { chats ->
+            viewModelScope.launch {
+                repository.insertChatMessagesLocal(chats)
+            }
+        }
+    }
+
+    private fun listenToAllExamMarksFromFirestore() {
+        allExamMarksListener?.remove()
+        allExamMarksListener = syncManager.listenToAllExamMarks { marks ->
+            viewModelScope.launch {
+                repository.insertExamMarksLocal(marks)
+            }
+        }
+    }
+
+    private fun listenToAllChatMessagesFromFirestore() {
+        allChatsListener?.remove()
+        allChatsListener = syncManager.listenToAllChatMessages { chats ->
+            viewModelScope.launch {
+                repository.insertChatMessagesLocal(chats)
             }
         }
     }
@@ -375,28 +585,33 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun notifyAttendanceIfNew(record: AttendanceRecord) {
-        // Include status in key so that updates (e.g. Present -> Absent or vice-versa) trigger real-time notification
-        val key = "notified_attendance_${record.attendanceId.ifEmpty { "${record.studentId}_${record.date}" }}_${record.status.lowercase()}"
-        if (!sharedPrefs.getBoolean(key, false)) {
-            viewModelScope.launch {
-                try {
-                    repository.saveAttendanceRecordFromCloud(record)
-                    
+        viewModelScope.launch {
+            try {
+                // ALWAYS save/update local database immediately so the student dashboard reflects changes in real-time!
+                repository.saveAttendanceRecordFromCloud(record)
+                
+                // Include status in key so that updates (e.g. Present -> Absent or vice-versa) trigger real-time notification
+                val key = "notified_attendance_${record.attendanceId.ifEmpty { "${record.studentId}_${record.date}" }}_${record.status.lowercase()}"
+                if (!sharedPrefs.getBoolean(key, false)) {
                     // Only trigger push notification if this is the phone where that specific student is logged in
                     if (record.studentId == _currentStudent.value?.studentId) {
-                        // Trigger push notification with the dynamic logo (loaded from custom_app_logo.png)
-                        notificationHelper.sendStudentAttendanceNotification(
-                            studentName = record.studentName,
-                            status = record.status,
-                            date = record.date,
-                            subject = "Daily Attendance"
-                        )
+                        // Prevent notifying on old historical records (e.g., older than 12 hours)
+                        val isRecent = (System.currentTimeMillis() - record.createdAt) < 12 * 3600000
+                        if (isRecent) {
+                            // Trigger push notification with the dynamic logo (loaded from custom_app_logo.png)
+                            notificationHelper.sendStudentAttendanceNotification(
+                                studentName = record.studentName,
+                                status = record.status,
+                                date = record.date,
+                                subject = "Daily Attendance"
+                            )
+                        }
                     }
                     // Mark as notified
                     sharedPrefs.edit().putBoolean(key, true).apply()
-                } catch (e: Exception) {
-                    Log.e("AttendanceViewModel", "Failed to process remote student attendance record: ${e.message}")
                 }
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Failed to process remote student attendance record: ${e.message}")
             }
         }
     }
@@ -718,34 +933,61 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         // Initialize working SMTP settings from BuildConfig defaults
         initSmtpDefaults()
 
+        // Trigger background automatic database synchronization on startup
+        viewModelScope.launch {
+            try {
+                // Sync unsynced attendance records to remote database first
+                repository.syncUnsyncedRecords()
+                // Fetch and sync everything from Supabase remote database
+                repository.fetchAndSyncFromSupabase()
+                Log.d("AttendanceViewModel", "Background startup database synchronization finished successfully!")
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Background startup database synchronization failed: ${e.message}")
+            }
+        }
+
         // Start listening to school logo URL updates in real-time from Firestore settings collection
         listenToAppLogoFromFirestore()
+
+        // Start listening to principal signature URL updates in real-time from Firestore settings collection
+        listenToPrincipalSignatureFromFirestore()
 
         // Start listening to payment config in real-time
         listenToPaymentConfigFromFirestore()
 
-        // Real-time listener for current student attendance push-notifications and fees
+        // Real-time listener for current student attendance push-notifications, details, fees, exam marks, and chats
         viewModelScope.launch {
             currentStudent.collect { student ->
                 if (student != null) {
                     listenToStudentAttendanceRemote(student.studentId)
                     listenToStudentFeesFromFirestore(student.studentId)
+                    listenToStudentDetailsFromFirestore(student.studentId)
+                    listenToStudentExamMarksFromFirestore(student.studentId)
+                    listenToStudentChatMessagesFromFirestore(student.studentId)
                 } else {
                     studentAttendanceListener?.remove()
                     studentAttendanceListener = null
                     studentFeesListener?.remove()
                     studentFeesListener = null
+                    studentDetailsListener?.remove()
+                    studentDetailsListener = null
+                    studentExamMarksListener?.remove()
+                    studentExamMarksListener = null
+                    studentChatsListener?.remove()
+                    studentChatsListener = null
                 }
             }
         }
 
-        // Real-time listener for all fees, students, and attendance when logged in as Admin
+        // Real-time listener for all fees, students, attendance, exam marks, and chats when logged in as Admin
         viewModelScope.launch {
             isAdminLoggedIn.collect { loggedIn ->
                 if (loggedIn) {
                     listenToAllFeesFromFirestore()
                     listenToAllStudentsFromFirestore()
                     listenToAllAttendanceFromFirestore()
+                    listenToAllExamMarksFromFirestore()
+                    listenToAllChatMessagesFromFirestore()
                 } else {
                     allFeesListener?.remove()
                     allFeesListener = null
@@ -753,6 +995,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     allStudentsListener = null
                     allAttendanceListener?.remove()
                     allAttendanceListener = null
+                    allExamMarksListener?.remove()
+                    allExamMarksListener = null
+                    allChatsListener?.remove()
+                    allChatsListener = null
                 }
             }
         }
@@ -1042,9 +1288,13 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 }
 
                 // Prepare records
-                val recordsToSave = filteredStudents.map { student ->
+                val recordsToSave = filteredStudents.filter { student ->
+                    val status = currentSheet[student.studentId] ?: "Present"
+                    status != "Cleared"
+                }.map { student ->
                     val status = currentSheet[student.studentId] ?: "Present"
                     AttendanceRecord(
+                        attendanceId = "${student.studentId}_${dateStr}",
                         studentId = student.studentId,
                         studentName = student.name,
                         studentClass = student.studentClass,
@@ -1060,7 +1310,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 val existingRecords = repository.getAttendanceForDate(dateStr).first()
                 for (record in existingRecords) {
                     if (record.studentClass.equals(cls, ignoreCase = true) && record.section.equals(sec, ignoreCase = true)) {
-                        db.attendanceDao().deleteAttendanceForStudentOnDate(record.studentId, dateStr)
+                        repository.clearAttendanceForStudentOnDate(record.studentId, dateStr)
                     }
                 }
 
@@ -1070,6 +1320,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 // Send Student Attendance Notifications & Parent Alerts
                 for (student in filteredStudents) {
                     val status = currentSheet[student.studentId] ?: "Present"
+                    if (status == "Cleared") continue
                     
                     // Trigger push/local notification to Student phone only if logged in
                     if (student.studentId == currentStudent.value?.studentId) {
@@ -1088,6 +1339,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             isPresent = status == "Present",
                             date = dateStr
                         )
+                        if (status == "Absent") {
+                            triggerSimulatedAbsentSms(student, dateStr)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -1310,8 +1564,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     fun loginStudent(studentId: String, pin: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
+            _uiState.value = UiState.Saving
+            try {
+                // Fetch and sync all students and attendance from remote database first
+                repository.fetchAndSyncFromSupabase()
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Remote sync failed before student login: ${e.message}")
+            }
+            
             val student = repository.getStudentByStudentId(studentId.trim())
             if (student == null) {
+                _uiState.value = UiState.Error("Student ID not found.")
                 onResult(false, "Student ID not found.")
             } else {
                 val enteredPassword = pin.trim()
@@ -1321,8 +1584,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     _currentStudent.value = student
                     _isStudentLoggedIn.value = true
                     showWelcome(student.name)
+                    _uiState.value = UiState.Success
                     onResult(true, "Welcome, ${student.name}!")
                 } else {
+                    _uiState.value = UiState.Error("Invalid Password.")
                     onResult(false, "Invalid Password. Please try again.")
                 }
             }
@@ -1333,8 +1598,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             _uiState.value = UiState.Saving
             try {
-                // Fetch and sync everything from Supabase first
-                val success = repository.fetchAndSyncFromSupabase()
+                // Fetch and sync specifically for this student from Supabase
+                val success = repository.fetchAndSyncStudentPortalDataFromSupabase(studentId)
                 // Update current logged in student state to the newly fetched data
                 val updatedStudent = repository.getStudentByStudentId(studentId)
                 if (updatedStudent != null) {
@@ -1345,6 +1610,23 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 onComplete(true)
             } catch (e: Exception) {
                 _uiState.value = UiState.Error(e.message ?: "Failed to reload student data.")
+                onComplete(false)
+            }
+        }
+    }
+
+    fun silentReloadStudentPortalData(studentId: String, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                val success = repository.fetchAndSyncStudentPortalDataFromSupabase(studentId)
+                val updatedStudent = repository.getStudentByStudentId(studentId)
+                if (updatedStudent != null) {
+                    _currentStudent.value = updatedStudent
+                    saveLoggedInStudent(updatedStudent)
+                }
+                onComplete(true)
+            } catch (e: Exception) {
+                Log.e("AttendanceViewModel", "Silent reload failed: ${e.message}")
                 onComplete(false)
             }
         }
@@ -1380,6 +1662,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     suspend fun uploadAppLogo(uri: Uri, onProgress: (Float) -> Unit = {}): String? {
         return storageHelper.uploadStudentPhoto(uri, "app_logo", onProgress)
+    }
+
+    suspend fun uploadPrincipalSignature(uri: Uri, onProgress: (Float) -> Unit = {}): String? {
+        return storageHelper.uploadStudentPhoto(uri, "principal_signature", onProgress)
     }
 
     // --- NEW DYNAMIC FEATURES FOR USER REQUIREMENTS ---
@@ -1564,6 +1850,13 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val current = _communityMessages.value.toMutableList()
         val msg = CommunityMessage(sender.trim(), role.trim(), message.trim(), System.currentTimeMillis())
         current.add(msg)
+        _communityMessages.value = current
+        saveCommunityMessagesToPrefs(current)
+    }
+
+    fun deleteCommunityMessage(msg: CommunityMessage) {
+        val current = _communityMessages.value.toMutableList()
+        current.removeAll { it.sender == msg.sender && it.message == msg.message && it.timestamp == msg.timestamp }
         _communityMessages.value = current
         saveCommunityMessagesToPrefs(current)
     }
@@ -1880,6 +2173,224 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     fun sendFeeReminderNotification(studentId: String, studentName: String, amount: Int) {
         notificationHelper.sendFeeReminderNotification(studentName, amount)
+    }
+
+    // --- TEACHER FLOWS & PORTAL STATE ---
+    val allTeachers: StateFlow<List<Teacher>> = repository.allTeachers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _isTeacherLoggedIn = MutableStateFlow(sharedPrefs.getBoolean("is_teacher_logged_in", false))
+    val isTeacherLoggedIn: StateFlow<Boolean> = _isTeacherLoggedIn.asStateFlow()
+
+    private val _currentTeacher = MutableStateFlow<Teacher?>(loadSavedTeacher())
+    val currentTeacher: StateFlow<Teacher?> = _currentTeacher.asStateFlow()
+
+    private fun loadSavedTeacher(): Teacher? {
+        if (!sharedPrefs.getBoolean("is_teacher_logged_in", false)) return null
+        val teacherId = sharedPrefs.getString("teacher_id", null) ?: return null
+        return Teacher(
+            teacherId = teacherId,
+            name = sharedPrefs.getString("teacher_name", "") ?: "",
+            assignedClass = sharedPrefs.getString("teacher_class", "") ?: "",
+            assignedSection = sharedPrefs.getString("teacher_section", "") ?: "",
+            mobile = sharedPrefs.getString("teacher_mobile", "") ?: "",
+            email = sharedPrefs.getString("teacher_email", "") ?: "",
+            status = sharedPrefs.getString("teacher_status", "Active") ?: "Active",
+            subject = sharedPrefs.getString("teacher_subject", "") ?: "",
+            photoPath = sharedPrefs.getString("teacher_photo_path", "") ?: ""
+        )
+    }
+
+    private fun saveLoggedInTeacher(teacher: Teacher) {
+        sharedPrefs.edit().apply {
+            putBoolean("is_teacher_logged_in", true)
+            putString("teacher_id", teacher.teacherId)
+            putString("teacher_name", teacher.name)
+            putString("teacher_class", teacher.assignedClass)
+            putString("teacher_section", teacher.assignedSection)
+            putString("teacher_mobile", teacher.mobile)
+            putString("teacher_email", teacher.email)
+            putString("teacher_status", teacher.status)
+            putString("teacher_subject", teacher.subject)
+            putString("teacher_photo_path", teacher.photoPath)
+            apply()
+        }
+    }
+
+    fun loginTeacher(teacherId: String, pin: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val teacher = repository.getTeacherByTeacherId(teacherId.trim())
+            if (teacher == null) {
+                // If T-101 default simulated teacher
+                if (teacherId.trim().lowercase() == "t-101" && pin.trim() == "123456") {
+                    val defaultTeacher = Teacher(teacherId = "T-101", name = "Simulated Class Teacher", assignedClass = "Class 10", assignedSection = "A", password = "123456", subject = "All", photoPath = "")
+                    repository.insertTeacher(defaultTeacher)
+                    saveLoggedInTeacher(defaultTeacher)
+                    _currentTeacher.value = defaultTeacher
+                    _isTeacherLoggedIn.value = true
+                    showWelcome(defaultTeacher.name)
+                    onResult(true, "Welcome, ${defaultTeacher.name}!")
+                } else {
+                    onResult(false, "Teacher ID not found.")
+                }
+            } else {
+                val enteredPassword = pin.trim()
+                val actualPassword = teacher.password.trim()
+                if (enteredPassword == actualPassword) {
+                    saveLoggedInTeacher(teacher)
+                    _currentTeacher.value = teacher
+                    _isTeacherLoggedIn.value = true
+                    showWelcome(teacher.name)
+                    onResult(true, "Welcome, ${teacher.name}!")
+                } else {
+                    onResult(false, "Invalid Password. Please try again.")
+                }
+            }
+        }
+    }
+
+    fun logoutTeacher() {
+        _isTeacherLoggedIn.value = false
+        _currentTeacher.value = null
+        sharedPrefs.edit().apply {
+            putBoolean("is_teacher_logged_in", false)
+            remove("teacher_id")
+            remove("teacher_name")
+            remove("teacher_class")
+            remove("teacher_section")
+            remove("teacher_mobile")
+            remove("teacher_email")
+            remove("teacher_status")
+            remove("teacher_subject")
+            remove("teacher_photo_path")
+            apply()
+        }
+    }
+
+    fun addTeacher(teacherId: String, name: String, assignedClass: String, assignedSection: String, mobile: String, email: String, pass: String, subject: String = "", photoPath: String = "") {
+        viewModelScope.launch {
+            val teacher = Teacher(
+                teacherId = teacherId.trim(),
+                name = name.trim(),
+                assignedClass = assignedClass.trim(),
+                assignedSection = assignedSection.trim(),
+                mobile = mobile.trim(),
+                email = email.trim(),
+                password = pass.trim(),
+                subject = subject.trim(),
+                photoPath = photoPath.trim()
+            )
+            repository.insertTeacher(teacher)
+        }
+    }
+
+    fun deleteTeacher(teacher: Teacher) {
+        viewModelScope.launch {
+            repository.deleteTeacher(teacher)
+        }
+    }
+
+    // --- EXAM MARKS FLOWS & METHODS ---
+    val allMarks: StateFlow<List<ExamMark>> = repository.allMarks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun addExamMark(studentId: String, studentName: String, examType: String, subject: String, marksObtained: Double, maxMarks: Double, remarks: String) {
+        viewModelScope.launch {
+            val mark = ExamMark(
+                studentId = studentId,
+                studentName = studentName,
+                examType = examType,
+                subject = subject,
+                marksObtained = marksObtained,
+                maxMarks = maxMarks,
+                remarks = remarks
+            )
+            repository.deleteSpecificMark(studentId, examType, subject) // overwrite existing mark
+            repository.insertExamMark(mark)
+        }
+    }
+
+    fun deleteExamMark(mark: ExamMark) {
+        viewModelScope.launch {
+            repository.deleteExamMark(mark)
+        }
+    }
+
+    // --- PARENT-TEACHER CHAT FLOWS & METHODS ---
+    val allChatMessages: StateFlow<List<ChatMessage>> = repository.allChatMessages
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun sendChatMessage(studentId: String, studentName: String, sender: String, senderName: String, msgText: String) {
+        viewModelScope.launch {
+            val chat = ChatMessage(
+                studentId = studentId,
+                studentName = studentName,
+                sender = sender,
+                senderName = senderName,
+                message = msgText,
+                timestamp = System.currentTimeMillis()
+            )
+            repository.insertChatMessage(chat)
+        }
+    }
+
+    fun deleteChatMessage(chat: ChatMessage) {
+        viewModelScope.launch {
+            repository.deleteChatMessage(chat)
+        }
+    }
+
+    fun markMessagesAsRead(studentId: String, sender: String) {
+        viewModelScope.launch {
+            repository.markMessagesAsRead(studentId, sender)
+        }
+    }
+
+    fun markMessagesForParentAsRead(studentId: String) {
+        viewModelScope.launch {
+            repository.markMessagesForParentAsRead(studentId)
+        }
+    }
+
+    // --- PARENT SMS AUTO-ALERTS SIMULATOR ---
+    val allSmsLogs: StateFlow<List<SmsLog>> = repository.allSmsLogs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun triggerSimulatedAbsentSms(student: Student, dateStr: String) {
+        viewModelScope.launch {
+            val fatherMobile = student.fatherMobile.ifEmpty { student.mobile }.ifEmpty { "9876543210" }
+            val messageText = "Toppers Academy Auto-Alert: Dear Parent, Aapka bachha ${student.name} (Roll No. ${student.rollNumber}) aaj school nahi aaya hai."
+            
+            // Log SMS
+            val smsLog = SmsLog(
+                studentId = student.studentId,
+                studentName = student.name,
+                parentMobile = fatherMobile,
+                messageText = messageText,
+                status = "Delivered",
+                channel = "SMS"
+            )
+            repository.insertSmsLog(smsLog)
+
+            // Log WhatsApp
+            val waLog = SmsLog(
+                studentId = student.studentId,
+                studentName = student.name,
+                parentMobile = fatherMobile,
+                messageText = messageText,
+                status = "Delivered",
+                channel = "WhatsApp"
+            )
+            repository.insertSmsLog(waLog)
+
+            // Trigger local notification so it pops up visually
+            notificationHelper.sendParentAlertNotification(
+                studentName = student.name,
+                rollNumber = student.rollNumber,
+                isPresent = false,
+                date = dateStr
+            )
+        }
     }
 }
 

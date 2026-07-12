@@ -126,7 +126,8 @@ fun LoginScreen(
     var newPass by remember { mutableStateOf("") }
 
     // Student Portal Login States
-    var isStudentPortal by remember { mutableStateOf(true) }
+    var selectedPortal by remember { mutableStateOf("student") }
+    val isStudentPortal = selectedPortal == "student"
     var studentIdInput by remember { mutableStateOf("") }
     var studentPasswordInput by remember { mutableStateOf("") }
     var studentIdError by remember { mutableStateOf<String?>(null) }
@@ -364,15 +365,20 @@ fun LoginScreen(
                     )
                     
                     AnimatedContent(
-                        targetState = isStudentPortal,
+                        targetState = selectedPortal,
                         transitionSpec = {
                             fadeIn(animationSpec = tween(220, delayMillis = 90)) togetherWith
                                     fadeOut(animationSpec = tween(90))
                         },
                         label = "SubtitleTransition"
-                    ) { studentActive ->
+                    ) { portal ->
+                        val subText = when (portal) {
+                            "student" -> "Secure Student/Parent Portal"
+                            "teacher" -> "Secure Teacher Portal"
+                            else -> "Secure Administrator Portal"
+                        }
                         Text(
-                            text = if (studentActive) "Secure Student Portal" else "Secure Administrator Portal",
+                            text = subText,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.8f)
@@ -392,57 +398,43 @@ fun LoginScreen(
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(if (isStudentPortal) MaterialTheme.colorScheme.primary else Color.Transparent)
-                            .clickable { isStudentPortal = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Student Portal",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = if (isStudentPortal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(if (!isStudentPortal) MaterialTheme.colorScheme.primary else Color.Transparent)
-                            .clickable { isStudentPortal = false },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Admin Portal",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = if (!isStudentPortal) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    listOf(
+                        "student" to "Student",
+                        "teacher" to "Teacher",
+                        "admin" to "Admin"
+                    ).forEach { (key, label) ->
+                        val isSelected = selectedPortal == key
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                .clickable { selectedPortal = key }
+                                .testTag("${key}_portal_tab"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 AnimatedContent(
-                    targetState = isStudentPortal,
+                    targetState = selectedPortal,
                     transitionSpec = {
-                        if (targetState) {
-                            (slideInHorizontally { width -> -width } + fadeIn(animationSpec = tween(320)))
-                                .togetherWith(slideOutHorizontally { width -> width } + fadeOut(animationSpec = tween(320)))
-                        } else {
-                            (slideInHorizontally { width -> width } + fadeIn(animationSpec = tween(320)))
-                                .togetherWith(slideOutHorizontally { width -> -width } + fadeOut(animationSpec = tween(320)))
-                        }
+                        fadeIn(animationSpec = tween(320)) togetherWith fadeOut(animationSpec = tween(320))
                     },
                     modifier = Modifier.fillMaxWidth(),
                     label = "PortalFormTransition"
-                ) { studentPortalActive ->
-                    if (!studentPortalActive) {
+                ) { portalKey ->
+                    if (portalKey == "admin") {
                         // Admin Portal Email OTP Login
                         Column(
                             modifier = Modifier.fillMaxWidth(),
@@ -870,6 +862,159 @@ fun LoginScreen(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
+                        }
+                    } else if (portalKey == "teacher") {
+                        // Teacher Portal ID & PIN Login
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            var teacherIdInput by remember { mutableStateOf("") }
+                            var teacherPasswordInput by remember { mutableStateOf("") }
+                            var teacherIdError by remember { mutableStateOf<String?>(null) }
+                            var teacherPasswordError by remember { mutableStateOf<String?>(null) }
+
+                            Text(
+                                text = "Enter your Teacher ID and PIN to access your classroom portal.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+
+                            // Styled Teacher ID Input
+                            OutlinedTextField(
+                                value = teacherIdInput,
+                                onValueChange = {
+                                    teacherIdInput = it
+                                    teacherIdError = null
+                                },
+                                label = { Text("Teacher ID (e.g. T-101)") },
+                                isError = teacherIdError != null,
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("teacher_id_input"),
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Badge, contentDescription = null)
+                                }
+                            )
+                            if (teacherIdError != null) {
+                                Text(
+                                    text = teacherIdError ?: "",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.align(Alignment.Start)
+                                )
+                            }
+
+                            // Styled PIN Input
+                            OutlinedTextField(
+                                value = teacherPasswordInput,
+                                onValueChange = {
+                                    teacherPasswordInput = it
+                                    teacherPasswordError = null
+                                },
+                                label = { Text("PIN") },
+                                isError = teacherPasswordError != null,
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                                modifier = Modifier.fillMaxWidth().testTag("teacher_password_input"),
+                                leadingIcon = {
+                                    Icon(imageVector = Icons.Default.Lock, contentDescription = null)
+                                }
+                            )
+                            if (teacherPasswordError != null) {
+                                Text(
+                                    text = teacherPasswordError ?: "",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.align(Alignment.Start)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            val teacherLoginInteractionSource = remember { MutableInteractionSource() }
+                            val teacherLoginScale by rememberButtonPressScale(teacherLoginInteractionSource)
+
+                            Button(
+                                onClick = {
+                                    var valid = true
+                                    if (teacherIdInput.trim().isEmpty()) {
+                                        teacherIdError = "Teacher ID is required."
+                                        valid = false
+                                    }
+                                    if (teacherPasswordInput.trim().isEmpty()) {
+                                        teacherPasswordError = "PIN is required."
+                                        valid = false
+                                    }
+
+                                    if (valid) {
+                                        viewModel.loginTeacher(teacherIdInput, teacherPasswordInput) { success, msg ->
+                                            if (success) {
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                teacherPasswordError = msg
+                                            }
+                                        }
+                                    }
+                                },
+                                interactionSource = teacherLoginInteractionSource,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                                contentPadding = PaddingValues(),
+                                shape = RoundedCornerShape(26.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .graphicsLayer {
+                                        scaleX = teacherLoginScale
+                                        scaleY = teacherLoginScale
+                                    }
+                                    .background(
+                                        brush = Brush.linearGradient(
+                                            colors = listOf(
+                                                MaterialTheme.colorScheme.primary,
+                                                MaterialTheme.colorScheme.secondary
+                                            )
+                                        ),
+                                        shape = RoundedCornerShape(26.dp)
+                                    )
+                                    .border(
+                                        width = 1.5.dp,
+                                        color = Color.White.copy(alpha = 0.25f),
+                                        shape = RoundedCornerShape(26.dp)
+                                    )
+                                    .testTag("teacher_login_submit_btn")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Icon(imageVector = Icons.Default.Login, contentDescription = null, tint = Color.White)
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "LOG IN AS TEACHER",
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.White,
+                                        letterSpacing = 1.5.sp,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = "Contact school administration if you do not have your Teacher ID or PIN.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
                         }
                     } else {
                         // Student Portal ID & PIN Login

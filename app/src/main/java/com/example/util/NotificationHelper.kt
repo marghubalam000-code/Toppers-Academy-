@@ -238,6 +238,79 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
+    fun sendAdminPaymentNotification(studentName: String, amount: Double, title: String) {
+        val message = "💸 Student $studentName has submitted a payment of ₹$amount for '$title'. Please review and verify the transaction."
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("💸 New Fee Payment Submitted")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        getLogoBitmap()?.let { builder.setLargeIcon(it) }
+
+        try {
+            with(NotificationManagerCompat.from(context)) {
+                val notificationId = (studentName.hashCode() + amount.hashCode() + title.hashCode() + System.currentTimeMillis().hashCode()).hashCode()
+                notify(notificationId, builder.build())
+            }
+        } catch (e: Exception) {
+            Log.e("NotificationHelper", "Failed to send admin payment notification: ${e.message}", e)
+        }
+    }
+
+    fun sendStudentFeeIssuedNotification(title: String, amount: Double, dueDate: String) {
+        val message = "🔔 A new fee of ₹$amount for '$title' has been issued. Due date: $dueDate. Please pay using UPI or Scanner."
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("🔔 New Fee Issued / शुल्क जारी")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        getLogoBitmap()?.let { builder.setLargeIcon(it) }
+
+        try {
+            with(NotificationManagerCompat.from(context)) {
+                val notificationId = (title.hashCode() + amount.hashCode() + dueDate.hashCode() + System.currentTimeMillis().hashCode()).hashCode()
+                notify(notificationId, builder.build())
+            }
+        } catch (e: Exception) {
+            Log.e("NotificationHelper", "Failed to send student fee issued notification: ${e.message}", e)
+        }
+    }
+
+    fun sendStudentFeeStatusNotification(title: String, status: String, rejectionReason: String) {
+        val statusEmoji = when (status) {
+            "Paid" -> "✅ APPROVED / स्वीकृत"
+            "Rejected" -> "❌ REJECTED / अस्वीकृत"
+            "Pending" -> "⏳ PENDING / लंबित"
+            else -> status
+        }
+        val reasonText = if (status == "Rejected" && rejectionReason.isNotEmpty()) "\nReason: $rejectionReason" else ""
+        val message = "Your fee payment for '$title' status is: $statusEmoji.$reasonText"
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("💰 Fee Payment Status Update")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+
+        getLogoBitmap()?.let { builder.setLargeIcon(it) }
+
+        try {
+            with(NotificationManagerCompat.from(context)) {
+                val notificationId = (title.hashCode() + status.hashCode() + System.currentTimeMillis().hashCode()).hashCode()
+                notify(notificationId, builder.build())
+            }
+        } catch (e: Exception) {
+            Log.e("NotificationHelper", "Failed to send student fee status notification: ${e.message}", e)
+        }
+    }
+
     private fun getLogoBitmap(): android.graphics.Bitmap? {
         return try {
             val file = java.io.File(context.filesDir, "custom_app_logo.png")

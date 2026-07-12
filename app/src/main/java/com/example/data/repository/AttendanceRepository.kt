@@ -3,9 +3,17 @@ package com.example.data.repository
 import com.example.data.local.StudentDao
 import com.example.data.local.AttendanceDao
 import com.example.data.local.FeeDao
+import com.example.data.local.TeacherDao
+import com.example.data.local.ExamMarkDao
+import com.example.data.local.ChatMessageDao
+import com.example.data.local.SmsLogDao
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.Student
 import com.example.data.model.FeeRecord
+import com.example.data.model.Teacher
+import com.example.data.model.ExamMark
+import com.example.data.model.ChatMessage
+import com.example.data.model.SmsLog
 import com.example.data.remote.FirestoreSyncManager
 import com.example.data.remote.SupabaseSyncManager
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +24,10 @@ class AttendanceRepository(
     private val studentDao: StudentDao,
     private val attendanceDao: AttendanceDao,
     private val feeDao: FeeDao,
+    private val teacherDao: TeacherDao,
+    private val examMarkDao: ExamMarkDao,
+    private val chatMessageDao: ChatMessageDao,
+    private val smsLogDao: SmsLogDao,
     private val syncManager: FirestoreSyncManager,
     private val supabaseSyncManager: SupabaseSyncManager
 ) {
@@ -204,6 +216,29 @@ class AttendanceRepository(
         return remoteStudents != null || remoteAttendance != null
     }
 
+    suspend fun fetchAndSyncStudentPortalDataFromSupabase(studentId: String): Boolean {
+        val remoteStudent = supabaseSyncManager.fetchStudentByStudentId(studentId)
+        val remoteAttendance = supabaseSyncManager.fetchAttendanceForStudent(studentId)
+
+        if (remoteStudent != null) {
+            val existing = studentDao.getStudentByStudentId(remoteStudent.studentId)
+            if (existing != null) {
+                studentDao.updateStudent(remoteStudent.copy(id = existing.id))
+            } else {
+                studentDao.insertStudent(remoteStudent)
+            }
+        }
+
+        if (remoteAttendance != null) {
+            for (record in remoteAttendance) {
+                attendanceDao.deleteAttendanceForStudentOnDate(record.studentId, record.date)
+                attendanceDao.insertAttendanceRecord(record)
+            }
+        }
+
+        return remoteStudent != null || remoteAttendance != null
+    }
+
     fun isCloudAvailable(): Boolean = syncManager.isCloudAvailable()
     fun isSupabaseAvailable(): Boolean = supabaseSyncManager.isSupabaseConfigured()
     suspend fun fetchAllowedEmailsFromSupabase(): List<String>? = supabaseSyncManager.fetchAllowedEmails()
@@ -217,4 +252,73 @@ class AttendanceRepository(
         attendanceDao.deleteAttendanceForStudentOnDate(record.studentId, record.date)
         attendanceDao.insertAttendanceRecord(record.copy(isSynced = true))
     }
+
+    suspend fun clearAttendanceForStudentOnDate(studentId: String, date: String) {
+        attendanceDao.deleteAttendanceForStudentOnDate(studentId, date)
+        val attendanceId = "${studentId}_${date}"
+        syncManager.deleteAttendanceRemote(attendanceId)
+        supabaseSyncManager.deleteAttendanceRemote(attendanceId)
+    }
+
+    // --- TEACHER METHODS ---
+    val allTeachers: Flow<List<Teacher>> = teacherDao.getAllTeachersFlow()
+    suspend fun getTeacherByTeacherId(teacherId: String): Teacher? = teacherDao.getTeacherByTeacherId(teacherId)
+    suspend fun insertTeacher(teacher: Teacher): Long = teacherDao.insertTeacher(teacher)
+    suspend fun updateTeacher(teacher: Teacher) = teacherDao.updateTeacher(teacher)
+    suspend fun deleteTeacher(teacher: Teacher) = teacherDao.deleteTeacher(teacher)
+
+    // --- EXAM MARK METHODS ---
+    val allMarks: Flow<List<ExamMark>> = examMarkDao.getAllMarksFlow()
+    fun getMarksForStudent(studentId: String): Flow<List<ExamMark>> = examMarkDao.getMarksForStudentFlow(studentId)
+    suspend fun insertExamMark(mark: ExamMark): Long {
+        val localId = examMarkDao.insertExamMark(mark)
+        val updatedMark = if (mark.id == 0) mark.copy(id = localId.toInt()) else mark
+        syncManager.syncExamMark(updatedMark)
+        return localId
+    }
+    suspend fun insertExamMarks(marks: List<ExamMark>) {
+        examMarkDao.insertExamMarks(marks)
+        for (mark in marks) {
+            syncManager.syncExamMark(mark)
+        }
+    }
+    suspend fun deleteExamMark(mark: ExamMark) {
+        examMarkDao.deleteExamMark(mark)
+        syncManager.deleteExamMarkRemote(mark.studentId, mark.examType, mark.subject)
+    }
+    suspend fun deleteSpecificMark(studentId: String, examType: String, subject: String) {
+        examMarkDao.deleteSpecificMark(studentId, examType, subject)
+        syncManager.deleteExamMarkRemote(studentId, examType, subject)
+    }
+
+    // --- CHAT MESSAGE METHODS ---
+    val allChatMessages: Flow<List<ChatMessage>> = chatMessageDao.getAllMessagesFlow()
+    fun getMessagesForStudent(studentId: String): Flow<List<ChatMessage>> = chatMessageDao.getMessagesForStudentFlow(studentId)
+    suspend fun insertChatMessage(message: ChatMessage): Long {
+        val localId = chatMessageDao.insertMessage(message)
+        val updatedMsg = if (message.id == 0) message.copy(id = localId.toInt()) else message
+        syncManager.syncChatMessage(updatedMsg)
+        return localId
+    }
+    suspend fun markMessagesAsRead(studentId: String, sender: String) = chatMessageDao.markMessagesAsRead(studentId, sender)
+    suspend fun markMessagesForParentAsRead(studentId: String) = chatMessageDao.markMessagesForParentAsRead(studentId)
+
+    suspend fun deleteChatMessage(message: ChatMessage) {
+        chatMessageDao.deleteMessage(message)
+        syncManager.deleteChatMessageRemote(message)
+    }
+
+    suspend fun insertExamMarksLocal(marks: List<ExamMark>) {
+        examMarkDao.insertExamMarks(marks)
+    }
+
+    suspend fun insertChatMessagesLocal(messages: List<ChatMessage>) {
+        for (msg in messages) {
+            chatMessageDao.insertMessage(msg)
+        }
+    }
+
+    // --- SMS LOG METHODS ---
+    val allSmsLogs: Flow<List<SmsLog>> = smsLogDao.getAllSmsLogsFlow()
+    suspend fun insertSmsLog(log: SmsLog): Long = smsLogDao.insertSmsLog(log)
 }

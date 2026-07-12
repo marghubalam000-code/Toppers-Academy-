@@ -29,6 +29,7 @@ import com.example.ui.components.bounceClick
 import java.text.SimpleDateFormat
 import java.util.*
 import android.net.Uri
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coil.compose.AsyncImage
@@ -47,6 +48,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.window.Dialog
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -224,7 +229,7 @@ fun StudentsScreen(
                 title = "Enroll New Student",
                 viewModel = viewModel,
                 onDismiss = { showAddDialog = false },
-                onSave = { name, email, cls, section, roll, mobile, father, mother, mainSubject, photo, status, gender, aadhaar, address, fatherMobile ->
+                onSave = { name, email, cls, section, roll, mobile, father, mother, mainSubject, photo, status, gender, aadhaar, address, fatherMobile, dob ->
                     viewModel.addStudent(
                         name = name,
                         email = email,
@@ -240,7 +245,8 @@ fun StudentsScreen(
                         gender = gender,
                         aadhaar = aadhaar,
                         address = address,
-                        fatherMobile = fatherMobile
+                        fatherMobile = fatherMobile,
+                        dob = dob
                     )
                     showAddDialog = false
                     Toast.makeText(context, "Student added successfully", Toast.LENGTH_SHORT).show()
@@ -255,7 +261,7 @@ fun StudentsScreen(
                 student = studentToEdit,
                 viewModel = viewModel,
                 onDismiss = { studentToEdit = null },
-                onSave = { name, email, cls, section, roll, mobile, father, mother, mainSubject, photo, status, gender, aadhaar, address, fatherMobile ->
+                onSave = { name, email, cls, section, roll, mobile, father, mother, mainSubject, photo, status, gender, aadhaar, address, fatherMobile, dob ->
                     val updated = studentToEdit!!.copy(
                         name = name,
                         email = email,
@@ -271,7 +277,8 @@ fun StudentsScreen(
                         gender = gender,
                         aadhaar = aadhaar,
                         address = address,
-                        fatherMobile = fatherMobile
+                        fatherMobile = fatherMobile,
+                        dob = dob
                     )
                     viewModel.updateStudent(updated)
                     studentToEdit = null
@@ -517,20 +524,32 @@ fun StudentCard(
                     )
                 }
 
+                val context = LocalContext.current
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.clickable {
+                        try {
+                            if (student.mobile.trim().isNotEmpty()) {
+                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${student.mobile.trim()}"))
+                                context.startActivity(intent)
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Could not open dialer", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 ) {
                     Icon(
                         imageVector = Icons.Default.Phone,
-                        contentDescription = "Phone Icon",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                        contentDescription = "Call Student",
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = student.mobile,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -560,7 +579,8 @@ fun StudentFormDialog(
         gender: String,
         aadhaar: String,
         address: String,
-        fatherMobile: String
+        fatherMobile: String,
+        dob: String
     ) -> Unit
 ) {
     var activeTab by remember { mutableStateOf(0) }
@@ -581,6 +601,7 @@ fun StudentFormDialog(
     var aadhaar by remember { mutableStateOf(student?.aadhaar ?: "") }
     var address by remember { mutableStateOf(student?.address ?: "") }
     var fatherMobile by remember { mutableStateOf(student?.fatherMobile ?: "") }
+    var dob by remember { mutableStateOf(student?.dob ?: "") }
 
     var nameError by remember { mutableStateOf<String?>(null) }
     var emailError by remember { mutableStateOf<String?>(null) }
@@ -590,6 +611,9 @@ fun StudentFormDialog(
     var aadhaarError by remember { mutableStateOf<String?>(null) }
     var addressError by remember { mutableStateOf<String?>(null) }
     var fatherMobileError by remember { mutableStateOf<String?>(null) }
+    var dobError by remember { mutableStateOf<String?>(null) }
+    var fatherNameError by remember { mutableStateOf<String?>(null) }
+    var motherNameError by remember { mutableStateOf<String?>(null) }
 
     val batchesListState = viewModel.batchesList.collectAsState()
     val classesList = batchesListState.value
@@ -890,9 +914,22 @@ fun StudentFormDialog(
                                         }
                                     },
                                     singleLine = true,
-                                                                    leadingIcon = { Icon(Icons.Default.Fingerprint, contentDescription = null) },
+                                    leadingIcon = { Icon(Icons.Default.Fingerprint, contentDescription = null) },
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("form_aadhaar")
+                                )
+
+                                // Date of Birth OutlinedTextField
+                                OutlinedTextField(
+                                    value = dob,
+                                    onValueChange = { dob = it; dobError = null },
+                                    label = { Text("Date of Birth (e.g. 15-08-2010) *") },
+                                    isError = dobError != null,
+                                    supportingText = dobError?.let { { Text(it) } },
+                                    singleLine = true,
+                                    leadingIcon = { Icon(Icons.Default.Cake, contentDescription = null) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth().testTag("form_dob")
                                 )
 
                                 // Student Address OutlinedTextField
@@ -972,8 +1009,10 @@ fun StudentFormDialog(
                             2 -> {
                                 OutlinedTextField(
                                     value = fatherName,
-                                    onValueChange = { fatherName = it },
-                                    label = { Text("Father's Name (Optional)") },
+                                    onValueChange = { fatherName = it; fatherNameError = null },
+                                    label = { Text("Father's Name *") },
+                                    isError = fatherNameError != null,
+                                    supportingText = fatherNameError?.let { { Text(it) } },
                                     singleLine = true,
                                     leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                                     shape = RoundedCornerShape(12.dp),
@@ -1007,8 +1046,10 @@ fun StudentFormDialog(
 
                                 OutlinedTextField(
                                     value = motherName,
-                                    onValueChange = { motherName = it },
-                                    label = { Text("Mother's Name (Optional)") },
+                                    onValueChange = { motherName = it; motherNameError = null },
+                                    label = { Text("Mother's Name *") },
+                                    isError = motherNameError != null,
+                                    supportingText = motherNameError?.let { { Text(it) } },
                                     singleLine = true,
                                     leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                                     shape = RoundedCornerShape(12.dp),
@@ -1097,6 +1138,12 @@ fun StudentFormDialog(
                         hasError = true
                     }
 
+                    if (dob.isBlank()) {
+                        dobError = "Date of Birth is required"
+                        if (!hasError) activeTab = 0
+                        hasError = true
+                    }
+
                     if (rollNumber.isBlank()) {
                         rollError = "Roll number is required"
                         if (!hasError) activeTab = 1
@@ -1120,6 +1167,18 @@ fun StudentFormDialog(
                     if (mainSubject.isBlank()) {
                         subjectError = "Main subject is required"
                         if (!hasError) activeTab = 1
+                        hasError = true
+                    }
+
+                    if (fatherName.trim().isBlank()) {
+                        fatherNameError = "Father's name is required"
+                        if (!hasError) activeTab = 2
+                        hasError = true
+                    }
+
+                    if (motherName.trim().isBlank()) {
+                        motherNameError = "Mother's name is required"
+                        if (!hasError) activeTab = 2
                         hasError = true
                     }
 
@@ -1149,7 +1208,8 @@ fun StudentFormDialog(
                             gender,
                             aadhaar.trim(),
                             address.trim(),
-                            fatherMobile.trim()
+                            fatherMobile.trim(),
+                            dob.trim()
                         )
                     }
                 },
@@ -1364,6 +1424,7 @@ fun StudentFeesManagementDialog(
     
     var rejectionReasonInput by remember { mutableStateOf("") }
     var rejectingFeeId by remember { mutableStateOf<String?>(null) }
+    var activeZoomUrl by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1498,6 +1559,33 @@ fun StudentFeesManagementDialog(
                                             )
                                         }
 
+                                        if (fee.screenshotUrl.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f))
+                                                    .clickable { activeZoomUrl = fee.screenshotUrl }
+                                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ZoomIn,
+                                                    contentDescription = "Zoom Payment Screenshot",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(
+                                                    text = "Zoom Payment Proof Screenshot",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+
                                         if (fee.status == "Pending") {
                                             Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
                                             
@@ -1513,7 +1601,8 @@ fun StudentFeesManagementDialog(
                                                         .fillMaxWidth()
                                                         .height(150.dp)
                                                         .clip(RoundedCornerShape(8.dp))
-                                                        .background(Color.Black),
+                                                        .background(Color.Black)
+                                                        .clickable { activeZoomUrl = fee.screenshotUrl },
                                                     contentAlignment = Alignment.Center
                                                 ) {
                                                     AsyncImage(
@@ -1660,5 +1749,88 @@ fun StudentFeesManagementDialog(
             }
         }
     )
+
+    if (activeZoomUrl != null) {
+        ZoomableImageDialog(imageUrl = activeZoomUrl!!, onDismiss = { activeZoomUrl = null })
+    }
+}
+
+@Composable
+fun ZoomableImageDialog(
+    imageUrl: String,
+    onDismiss: () -> Unit
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    
+    Dialog(
+        onDismissRequest = onDismiss
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(16.dp)),
+            color = Color.Black
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            if (scale > 1f) {
+                                offset += pan
+                            } else {
+                                offset = androidx.compose.ui.geometry.Offset.Zero
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = "Zoomed screenshot",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        ),
+                    contentScale = ContentScale.Fit
+                )
+                
+                // Close button
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color.White
+                    )
+                }
+
+                if (scale > 1f) {
+                    Text(
+                        text = "Drag to scroll | Pinch to zoom",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(12.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 

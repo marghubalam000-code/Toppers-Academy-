@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.example.data.model.AttendanceRecord
 import com.example.data.model.Student
+import com.example.data.model.ExamMark
+import com.example.data.model.ChatMessage
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
@@ -180,6 +182,25 @@ class FirestoreSyncManager(private val context: Context) {
         }
     }
 
+    fun listenToPrincipalSignature(onSignatureChanged: (String) -> Unit) {
+        val fs = firestore ?: return
+        try {
+            fs.collection("settings").document("app_config")
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null && snapshot.exists()) {
+                        val signatureUrl = snapshot.getString("principal_signature_uri") ?: ""
+                        onSignatureChanged(signatureUrl)
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register principal signature listener: ${ex.message}")
+        }
+    }
+
     fun listenToStudentAttendance(studentId: String, onNewRecord: (AttendanceRecord) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
         val fs = firestore ?: return null
         return try {
@@ -226,10 +247,24 @@ class FirestoreSyncManager(private val context: Context) {
         val fs = firestore ?: return false
         return try {
             val data = hashMapOf("app_logo_uri" to logoUrl)
-            fs.collection("settings").document("app_config").set(data).await()
+            fs.collection("settings").document("app_config")
+                .set(data, com.google.firebase.firestore.SetOptions.merge()).await()
             true
         } catch (e: Exception) {
             Log.e("FirestoreSyncManager", "Error updating app logo remote: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun updatePrincipalSignatureRemote(signatureUrl: String): Boolean {
+        val fs = firestore ?: return false
+        return try {
+            val data = hashMapOf("principal_signature_uri" to signatureUrl)
+            fs.collection("settings").document("app_config")
+                .set(data, com.google.firebase.firestore.SetOptions.merge()).await()
+            true
+        } catch (e: Exception) {
+            Log.e("FirestoreSyncManager", "Error updating principal signature remote: ${e.message}", e)
             false
         }
     }
@@ -484,6 +519,286 @@ class FirestoreSyncManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e("FirestoreSyncManager", "Error updating payment config remote: ${e.message}", e)
             false
+        }
+    }
+
+    fun listenToStudentDetails(studentId: String, onStudentChanged: (Student) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
+        val fs = firestore ?: return null
+        return try {
+            fs.collection("students")
+                .document(studentId)
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen to student details failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null && snapshot.exists()) {
+                        try {
+                            val student = Student(
+                                id = 0,
+                                studentId = snapshot.getString("studentId") ?: snapshot.id,
+                                name = snapshot.getString("name") ?: "",
+                                fatherName = snapshot.getString("fatherName") ?: "",
+                                motherName = snapshot.getString("motherName") ?: "",
+                                mobile = snapshot.getString("mobile") ?: "",
+                                email = snapshot.getString("email") ?: "",
+                                studentClass = snapshot.getString("class") ?: "",
+                                section = snapshot.getString("section") ?: "",
+                                rollNumber = snapshot.getString("rollNumber") ?: "",
+                                gender = snapshot.getString("gender") ?: "",
+                                dob = snapshot.getString("dob") ?: "",
+                                address = snapshot.getString("address") ?: "",
+                                aadhaar = snapshot.getString("aadhaar") ?: "",
+                                admissionDate = snapshot.getString("admissionDate") ?: "",
+                                photo = snapshot.getString("photo") ?: "",
+                                status = snapshot.getString("status") ?: "Active",
+                                password = snapshot.getString("password") ?: "",
+                                mainSubject = snapshot.getString("mainSubject") ?: ""
+                            )
+                            onStudentChanged(student)
+                        } catch (ex: Exception) {
+                            Log.e("FirestoreSyncManager", "Error parsing student details: ${ex.message}")
+                        }
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register student details listener: ${ex.message}")
+            null
+        }
+    }
+
+    suspend fun syncExamMark(mark: ExamMark): Boolean {
+        val fs = firestore ?: return false
+        return try {
+            val docId = "${mark.studentId}_${mark.examType}_${mark.subject}".replace("/", "_")
+            val data = hashMapOf(
+                "id" to mark.id,
+                "studentId" to mark.studentId,
+                "studentName" to mark.studentName,
+                "examType" to mark.examType,
+                "subject" to mark.subject,
+                "marksObtained" to mark.marksObtained,
+                "maxMarks" to mark.maxMarks,
+                "remarks" to mark.remarks,
+                "lastUpdated" to mark.lastUpdated
+            )
+            fs.collection("exam_marks")
+                .document(docId)
+                .set(data)
+                .await()
+            Log.d("FirestoreSyncManager", "Successfully synced exam mark $docId to Firestore.")
+            true
+        } catch (e: Exception) {
+            Log.e("FirestoreSyncManager", "Error syncing exam mark to Firestore: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun deleteExamMarkRemote(studentId: String, examType: String, subject: String): Boolean {
+        val fs = firestore ?: return false
+        return try {
+            val docId = "${studentId}_${examType}_${subject}".replace("/", "_")
+            fs.collection("exam_marks").document(docId).delete().await()
+            Log.d("FirestoreSyncManager", "Successfully deleted exam mark $docId from Firestore.")
+            true
+        } catch (e: Exception) {
+            Log.e("FirestoreSyncManager", "Error deleting exam mark from Firestore: ${e.message}", e)
+            false
+        }
+    }
+
+    fun listenToStudentExamMarks(studentId: String, onExamMarksChanged: (List<ExamMark>) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
+        val fs = firestore ?: return null
+        return try {
+            fs.collection("exam_marks")
+                .whereEqualTo("studentId", studentId)
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen to student exam marks failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = mutableListOf<ExamMark>()
+                        for (doc in snapshot.documents) {
+                            try {
+                                val mark = ExamMark(
+                                    id = doc.getLong("id")?.toInt() ?: 0,
+                                    studentId = doc.getString("studentId") ?: "",
+                                    studentName = doc.getString("studentName") ?: "",
+                                    examType = doc.getString("examType") ?: "",
+                                    subject = doc.getString("subject") ?: "",
+                                    marksObtained = doc.getDouble("marksObtained") ?: 0.0,
+                                    maxMarks = doc.getDouble("maxMarks") ?: 100.0,
+                                    remarks = doc.getString("remarks") ?: "",
+                                    lastUpdated = doc.getLong("lastUpdated") ?: System.currentTimeMillis()
+                                )
+                                list.add(mark)
+                            } catch (ex: Exception) {
+                                Log.e("FirestoreSyncManager", "Error parsing exam mark: ${ex.message}")
+                            }
+                        }
+                        onExamMarksChanged(list)
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register student exam marks listener: ${ex.message}")
+            null
+        }
+    }
+
+    fun listenToAllExamMarks(onExamMarksChanged: (List<ExamMark>) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
+        val fs = firestore ?: return null
+        return try {
+            fs.collection("exam_marks")
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen to all exam marks failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = mutableListOf<ExamMark>()
+                        for (doc in snapshot.documents) {
+                            try {
+                                val mark = ExamMark(
+                                    id = doc.getLong("id")?.toInt() ?: 0,
+                                    studentId = doc.getString("studentId") ?: "",
+                                    studentName = doc.getString("studentName") ?: "",
+                                    examType = doc.getString("examType") ?: "",
+                                    subject = doc.getString("subject") ?: "",
+                                    marksObtained = doc.getDouble("marksObtained") ?: 0.0,
+                                    maxMarks = doc.getDouble("maxMarks") ?: 100.0,
+                                    remarks = doc.getString("remarks") ?: "",
+                                    lastUpdated = doc.getLong("lastUpdated") ?: System.currentTimeMillis()
+                                )
+                                list.add(mark)
+                            } catch (ex: Exception) {
+                                Log.e("FirestoreSyncManager", "Error parsing exam mark: ${ex.message}")
+                            }
+                        }
+                        onExamMarksChanged(list)
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register all exam marks listener: ${ex.message}")
+            null
+        }
+    }
+
+    suspend fun syncChatMessage(chat: ChatMessage): Boolean {
+        val fs = firestore ?: return false
+        return try {
+            // Generate unique document ID for chat: studentId_timestamp
+            val docId = "${chat.studentId}_${chat.timestamp}"
+            val data = hashMapOf(
+                "id" to chat.id,
+                "studentId" to chat.studentId,
+                "studentName" to chat.studentName,
+                "sender" to chat.sender,
+                "senderName" to chat.senderName,
+                "message" to chat.message,
+                "timestamp" to chat.timestamp,
+                "isRead" to chat.isRead
+            )
+            fs.collection("chat_messages")
+                .document(docId)
+                .set(data)
+                .await()
+            Log.d("FirestoreSyncManager", "Successfully synced chat message $docId to Firestore.")
+            true
+        } catch (e: Exception) {
+            Log.e("FirestoreSyncManager", "Error syncing chat message to Firestore: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun deleteChatMessageRemote(chat: ChatMessage): Boolean {
+        val fs = firestore ?: return false
+        return try {
+            val docId = "${chat.studentId}_${chat.timestamp}"
+            fs.collection("chat_messages")
+                .document(docId)
+                .delete()
+                .await()
+            Log.d("FirestoreSyncManager", "Successfully deleted chat message $docId from Firestore.")
+            true
+        } catch (e: Exception) {
+            Log.e("FirestoreSyncManager", "Error deleting chat message from Firestore: ${e.message}", e)
+            false
+        }
+    }
+
+    fun listenToStudentChatMessages(studentId: String, onChatsChanged: (List<ChatMessage>) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
+        val fs = firestore ?: return null
+        return try {
+            fs.collection("chat_messages")
+                .whereEqualTo("studentId", studentId)
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen to student chats failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = mutableListOf<ChatMessage>()
+                        for (doc in snapshot.documents) {
+                            try {
+                                val chat = ChatMessage(
+                                    id = doc.getLong("id")?.toInt() ?: 0,
+                                    studentId = doc.getString("studentId") ?: "",
+                                    studentName = doc.getString("studentName") ?: "",
+                                    sender = doc.getString("sender") ?: "",
+                                    senderName = doc.getString("senderName") ?: "",
+                                    message = doc.getString("message") ?: "",
+                                    timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis(),
+                                    isRead = doc.getBoolean("isRead") ?: false
+                                )
+                                list.add(chat)
+                            } catch (ex: Exception) {
+                                Log.e("FirestoreSyncManager", "Error parsing chat: ${ex.message}")
+                            }
+                        }
+                        onChatsChanged(list)
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register student chats listener: ${ex.message}")
+            null
+        }
+    }
+
+    fun listenToAllChatMessages(onChatsChanged: (List<ChatMessage>) -> Unit): com.google.firebase.firestore.ListenerRegistration? {
+        val fs = firestore ?: return null
+        return try {
+            fs.collection("chat_messages")
+                .addSnapshotListener { snapshot, e ->
+                    if (e != null) {
+                        Log.e("FirestoreSyncManager", "Listen to all chats failed.", e)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = mutableListOf<ChatMessage>()
+                        for (doc in snapshot.documents) {
+                            try {
+                                val chat = ChatMessage(
+                                    id = doc.getLong("id")?.toInt() ?: 0,
+                                    studentId = doc.getString("studentId") ?: "",
+                                    studentName = doc.getString("studentName") ?: "",
+                                    sender = doc.getString("sender") ?: "",
+                                    senderName = doc.getString("senderName") ?: "",
+                                    message = doc.getString("message") ?: "",
+                                    timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis(),
+                                    isRead = doc.getBoolean("isRead") ?: false
+                                )
+                                list.add(chat)
+                            } catch (ex: Exception) {
+                                Log.e("FirestoreSyncManager", "Error parsing chat: ${ex.message}")
+                            }
+                        }
+                        onChatsChanged(list)
+                    }
+                }
+        } catch (ex: Exception) {
+            Log.e("FirestoreSyncManager", "Failed to register all chats listener: ${ex.message}")
+            null
         }
     }
 }

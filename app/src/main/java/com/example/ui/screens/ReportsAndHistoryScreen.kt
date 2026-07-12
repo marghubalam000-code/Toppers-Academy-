@@ -4,6 +4,7 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,6 +41,8 @@ fun ReportsAndHistoryScreen(
     val context = LocalContext.current
     val students by viewModel.students.collectAsState()
     val allAttendance by viewModel.allAttendanceRecords.collectAsState()
+
+    var studentToShareCustomAttendance by remember { mutableStateOf<Student?>(null) }
 
     var activeTabIdx by remember { mutableStateOf(0) } // 0: History Logs, 1: Performance Reports
     val tabTitles = listOf("Attendance History", "Attendance Reports")
@@ -443,17 +446,36 @@ fun ReportsAndHistoryScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("Export Performance Reports", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
-                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text("Export Reports", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Our custom Date-wise Share button
+                                            Button(
+                                                onClick = { studentToShareCustomAttendance = student },
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                modifier = Modifier.height(28.dp),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                                    contentColor = MaterialTheme.colorScheme.primary
+                                                ),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Icon(Icons.Default.Share, contentDescription = "Share Custom", modifier = Modifier.size(12.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Date-wise Share / तारीख अनुसार", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            }
+
                                             IconButton(
                                                 onClick = {
                                                     val docStr = exportReportAsText(student, presents, absents, leaves, holidays, percentage)
                                                     shareExportIntent(docStr, "PDF Document")
                                                     Toast.makeText(context, "Dispatched PDF Report Layout Share", Toast.LENGTH_SHORT).show()
                                                 },
-                                                modifier = Modifier.size(34.dp)
+                                                modifier = Modifier.size(28.dp)
                                             ) {
-                                                Icon(Icons.Default.PictureAsPdf, contentDescription = "PDF", tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.PictureAsPdf, contentDescription = "PDF", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
                                             }
 
                                             IconButton(
@@ -462,9 +484,9 @@ fun ReportsAndHistoryScreen(
                                                     shareExportIntent(docStr, "Excel Sheet")
                                                     Toast.makeText(context, "Dispatched Microsoft Excel Sheet Layout Share", Toast.LENGTH_SHORT).show()
                                                 },
-                                                modifier = Modifier.size(34.dp)
+                                                modifier = Modifier.size(28.dp)
                                             ) {
-                                                Icon(Icons.Default.TableChart, contentDescription = "Excel", tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.TableChart, contentDescription = "Excel", tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
                                             }
 
                                             IconButton(
@@ -473,9 +495,9 @@ fun ReportsAndHistoryScreen(
                                                     shareExportIntent(docStr, "Print Job")
                                                     Toast.makeText(context, "Dispatched System Print Layout Spooler Share", Toast.LENGTH_SHORT).show()
                                                 },
-                                                modifier = Modifier.size(34.dp)
+                                                modifier = Modifier.size(28.dp)
                                             ) {
-                                                Icon(Icons.Default.Print, contentDescription = "Print", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.Print, contentDescription = "Print", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                                             }
                                         }
                                     }
@@ -487,6 +509,341 @@ fun ReportsAndHistoryScreen(
             }
         }
     }
+
+    if (studentToShareCustomAttendance != null) {
+        ShareCustomAttendanceDialog(
+            student = studentToShareCustomAttendance!!,
+            allAttendance = allAttendance,
+            onDismiss = { studentToShareCustomAttendance = null },
+            shareExportIntent = ::shareExportIntent
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ShareCustomAttendanceDialog(
+    student: Student,
+    allAttendance: List<AttendanceRecord>,
+    onDismiss: () -> Unit,
+    shareExportIntent: (content: String, formatName: String) -> Unit
+) {
+    val context = LocalContext.current
+    val studentAttendance = remember(allAttendance, student.studentId) {
+        allAttendance.filter { it.studentId == student.studentId }.sortedByDescending { it.date }
+    }
+
+    var selectionMode by remember { mutableStateOf(0) } // 0: Quick Select, 1: Custom Date Range
+    var quickDaysSelect by remember { mutableStateOf(15) } // Default 15 days
+    
+    // Custom Date Range variables
+    var startDateStr by remember { mutableStateOf("") }
+    var endDateStr by remember { mutableStateOf("") }
+
+    // DatePicker setup for Start Date
+    val startCalendar = java.util.Calendar.getInstance()
+    val startDatePickerDialog = android.app.DatePickerDialog(
+        context,
+        { _, y, m, d ->
+            val formattedMonth = String.format("%02d", m + 1)
+            val formattedDay = String.format("%02d", d)
+            startDateStr = "$y-$formattedMonth-$formattedDay"
+        },
+        startCalendar.get(java.util.Calendar.YEAR),
+        startCalendar.get(java.util.Calendar.MONTH),
+        startCalendar.get(java.util.Calendar.DAY_OF_MONTH)
+    )
+
+    // DatePicker setup for End Date
+    val endCalendar = java.util.Calendar.getInstance()
+    val endDatePickerDialog = android.app.DatePickerDialog(
+        context,
+        { _, y, m, d ->
+            val formattedMonth = String.format("%02d", m + 1)
+            val formattedDay = String.format("%02d", d)
+            endDateStr = "$y-$formattedMonth-$formattedDay"
+        },
+        endCalendar.get(java.util.Calendar.YEAR),
+        endCalendar.get(java.util.Calendar.MONTH),
+        endCalendar.get(java.util.Calendar.DAY_OF_MONTH)
+    )
+
+    // Compute the list of attendance to be shared
+    val filteredLogs = remember(studentAttendance, selectionMode, quickDaysSelect, startDateStr, endDateStr) {
+        if (selectionMode == 0) {
+            // Take first N days of recorded attendance
+            studentAttendance.take(quickDaysSelect)
+        } else {
+            // Custom date range filter
+            studentAttendance.filter { record ->
+                val dateOk = (startDateStr.isEmpty() || record.date >= startDateStr) &&
+                             (endDateStr.isEmpty() || record.date <= endDateStr)
+                dateOk
+            }
+        }
+    }.sortedBy { it.date } // sort ascending date-wise for sharing chronologically
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Date-wise Attendance Share", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(student.name, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Segmented control or Tab row for Quick vs Custom
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    horizontalArrangement = Arrangement.spacedBy(1.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selectionMode == 0) MaterialTheme.colorScheme.primary else Color.Transparent)
+                            .clickable { selectionMode = 0 }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Quick Options",
+                            color = if (selectionMode == 0) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selectionMode == 1) MaterialTheme.colorScheme.primary else Color.Transparent)
+                            .clickable { selectionMode = 1 }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Custom Date Range",
+                            color = if (selectionMode == 1) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                if (selectionMode == 0) {
+                    // Quick select options
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Select range of days:", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(7, 15, 30, 60, 90).forEach { days ->
+                                val isSelected = quickDaysSelect == days
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                        .border(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(6.dp))
+                                        .clickable { quickDaysSelect = days }
+                                        .padding(vertical = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("$days Days", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Custom select range
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Choose custom date range:", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = startDateStr,
+                                    onValueChange = {},
+                                    label = { Text("Start Date", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(6.dp),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+                                    trailingIcon = { Icon(Icons.Default.CalendarToday, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .clickable { startDatePickerDialog.show() }
+                                )
+                            }
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedTextField(
+                                    value = endDateStr,
+                                    onValueChange = {},
+                                    label = { Text("End Date", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(6.dp),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+                                    trailingIcon = { Icon(Icons.Default.CalendarToday, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .clickable { endDatePickerDialog.show() }
+                                )
+                            }
+                        }
+                        if (startDateStr.isNotEmpty() || endDateStr.isNotEmpty()) {
+                            Text(
+                                "Clear Dates",
+                                color = Color.Red.copy(alpha = 0.8f),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .align(Alignment.End)
+                                    .clickable {
+                                        startDateStr = ""
+                                        endDateStr = ""
+                                    }
+                            )
+                        }
+                    }
+                }
+
+                Divider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+
+                // Preview summary & date-wise items
+                Text("Sharing ${filteredLogs.size} records date-wise:", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                
+                if (filteredLogs.isEmpty()) {
+                    Text("No attendance records found in this range.", fontSize = 11.sp, color = Color.Red, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(8.dp))
+                } else {
+                    val presentLogs = filteredLogs.count { it.status == "Present" }
+                    val absentLogs = filteredLogs.count { it.status == "Absent" }
+                    val leaveLogs = filteredLogs.count { it.status == "Leave" }
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                            .padding(6.dp),
+                        horizontalArrangement = Arrangement.SpaceAround
+                    ) {
+                        Text("Present: $presentLogs ✅", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F766E))
+                        Text("Absent: $absentLogs ❌", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF991B1B))
+                        Text("Leave: $leaveLogs 📝", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
+                    }
+
+                    // Show a small preview scroll of records
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 100.dp)
+                            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                            .padding(6.dp)
+                    ) {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(filteredLogs) { log ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("📅 ${log.date}", fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                                    val (statusText, statusColor) = when (log.status) {
+                                        "Present" -> "Present ✅" to Color(0xFF10B981)
+                                        "Absent" -> "Absent ❌" to Color(0xFFEF4444)
+                                        "Leave" -> "Leave 📝" to Color(0xFFF59E0B)
+                                        else -> log.status to Color.Gray
+                                    }
+                                    Text(statusText, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = statusColor)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (filteredLogs.isEmpty()) {
+                        Toast.makeText(context, "No records to share", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    val presents = filteredLogs.count { it.status == "Present" }
+                    val absents = filteredLogs.count { it.status == "Absent" }
+                    val leaves = filteredLogs.count { it.status == "Leave" }
+                    val working = presents + absents + leaves
+                    val rate = if (working > 0) (presents * 100) / working else 100
+
+                    val titleText = if (selectionMode == 0) "Last $quickDaysSelect Days" else "Range: ${startDateStr.ifEmpty { "Start" }} to ${endDateStr.ifEmpty { "End" }}"
+                    val shareStr = StringBuilder().apply {
+                        append("🏫 *TOPPERS ACADEMY — ATTENDANCE REPORT*\n")
+                        append("====================================\n")
+                        append("👤 *Student:* ${student.name}\n")
+                        append("🆔 *Student ID:* ${student.studentId}\n")
+                        append("🔢 *Roll No:* ${student.rollNumber}\n")
+                        append("📚 *Class:* ${student.studentClass} - ${student.section}\n")
+                        append("📊 *Period:* $titleText\n")
+                        append("====================================\n\n")
+                        append("📅 *DATE-WISE LOGS (तारीख के अनुसार):*\n")
+                        
+                        filteredLogs.forEach { log ->
+                            val statusEmoji = when (log.status) {
+                                "Present" -> "✅ Present"
+                                "Absent" -> "❌ Absent"
+                                "Leave" -> "📝 Leave"
+                                else -> "📅 ${log.status}"
+                            }
+                            append("• ${log.date} : $statusEmoji\n")
+                        }
+
+                        append("\n📈 *OVERVIEW STATISTICS:*\n")
+                        append("------------------------------------\n")
+                        append("✔️ Present Days : $presents days\n")
+                        append("❌ Absent Days  : $absents days\n")
+                        append("📝 Leave Days   : $leaves days\n")
+                        append("📆 Working Days : $working days\n")
+                        append("📊 Attendance   : $rate%\n")
+                        append("------------------------------------\n")
+                        append("Generated via Toppers Academy Portal\n")
+                    }.toString()
+
+                    shareExportIntent(shareStr, "Date-Wise Attendance Report")
+                    Toast.makeText(context, "Attendance Shared Successfully", Toast.LENGTH_SHORT).show()
+                    onDismiss()
+                },
+                enabled = filteredLogs.isNotEmpty(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Share Date-Wise / शेयर करें", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", fontSize = 12.sp)
+            }
+        }
+    )
 }
 
 @Composable

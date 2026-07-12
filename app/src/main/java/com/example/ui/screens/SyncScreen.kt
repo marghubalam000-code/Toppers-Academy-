@@ -3,7 +3,9 @@ package com.example.ui.screens
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -74,6 +76,38 @@ fun SyncScreen(
                 } finally {
                     isUploading = false
                     uploadProgress = 0f
+                }
+            }
+        }
+    }
+
+    val principalSignatureUri by viewModel.principalSignatureUri.collectAsState()
+    var isUploadingSig by remember { mutableStateOf(false) }
+    var uploadProgressSig by remember { mutableStateOf(0f) }
+
+    val signaturePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            isUploadingSig = true
+            coroutineScope.launch {
+                try {
+                    val uploadedUrl = viewModel.uploadPrincipalSignature(uri) { progress ->
+                        uploadProgressSig = progress
+                    }
+                    if (uploadedUrl != null) {
+                        viewModel.setPrincipalSignatureUri(uploadedUrl)
+                        Toast.makeText(context, "Principal signature uploaded and updated successfully!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.setPrincipalSignatureUri(uri.toString())
+                        Toast.makeText(context, "Principal signature applied locally!", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    viewModel.setPrincipalSignatureUri(uri.toString())
+                    Toast.makeText(context, "Principal signature applied locally (offline mode)!", Toast.LENGTH_SHORT).show()
+                } finally {
+                    isUploadingSig = false
+                    uploadProgressSig = 0f
                 }
             }
         }
@@ -1289,6 +1323,142 @@ fun SyncScreen(
                             onClick = { viewModel.resetAppLogoUri() },
                             modifier = Modifier.weight(1f).height(44.dp).testTag("reset_logo_btn"),
                             enabled = !isUploading,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Reset"
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Reset Default", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Principal Signature Management Card
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("principal_signature_management_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Signature Settings",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Principal's Official Signature",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+
+                Text(
+                    text = "Upload the Principal's official signature. This uploaded signature will be displayed on all Student ID Cards and official reports, substituting the default signature placeholder in real-time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Signature Preview
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(80.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (principalSignatureUri.isNotEmpty()) {
+                        AsyncImage(
+                            model = principalSignatureUri,
+                            contentDescription = "Principal Signature Preview",
+                            modifier = Modifier.fillMaxHeight().padding(8.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Principal",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 18.sp,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Gray.copy(alpha = 0.5f)
+                            )
+                            Text(
+                                text = "NO SIGNATURE UPLOADED",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+
+                if (isUploadingSig) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { uploadProgressSig },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                        Text(
+                            text = "Uploading... ${(uploadProgressSig * 100).toInt()}%",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = { signaturePickerLauncher.launch("image/*") },
+                        modifier = Modifier.weight(1f).height(44.dp).testTag("upload_signature_btn"),
+                        enabled = !isUploadingSig,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Upload,
+                            contentDescription = "Upload"
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Upload Signature", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    if (principalSignatureUri.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { viewModel.resetPrincipalSignatureUri() },
+                            modifier = Modifier.weight(1f).height(44.dp).testTag("reset_signature_btn"),
+                            enabled = !isUploadingSig,
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                         ) {
